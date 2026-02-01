@@ -741,8 +741,33 @@ class MainActivity : AppCompatActivity() {
             return
         }
         
+        // Filtra i file validi e rimuovi quelli non più accessibili
+        val validHistory = fileHistory.filter { entry ->
+            try {
+                val uri = Uri.parse(entry.first)
+                isUriValid(uri)
+            } catch (e: Exception) {
+                false
+            }
+        }
+        
+        // Se ci sono file non validi, aggiorna la cronologia
+        if (validHistory.size < fileHistory.size) {
+            saveFileHistory(validHistory)
+        }
+        
+        // Se dopo il filtraggio non ci sono più file, mostra messaggio
+        if (validHistory.isEmpty()) {
+            MaterialAlertDialogBuilder(this)
+                .setTitle(getString(R.string.recent_files))
+                .setMessage(getString(R.string.no_recent_files))
+                .setPositiveButton(getString(R.string.ok), null)
+                .show()
+            return
+        }
+        
         // Crea una lista personalizzata per mostrare nome e percorso
-        val items = fileHistory.map { entry ->
+        val items = validHistory.map { entry ->
             val uri = Uri.parse(entry.first)
             val fileName = getFileNameFromUri(uri)
             // Ottieni il percorso in modo più leggibile
@@ -785,8 +810,24 @@ class MainActivity : AppCompatActivity() {
         MaterialAlertDialogBuilder(this)
             .setTitle(getString(R.string.recent_files))
             .setAdapter(adapter) { _, which ->
-                val selectedUri = Uri.parse(fileHistory[which].first)
-                loadFileContent(selectedUri)
+                try {
+                    val uriString = validHistory[which].first
+                    val selectedUri = Uri.parse(uriString)
+                    
+                    // Verifica che l'URI sia ancora valido prima di caricarlo
+                    if (isUriValid(selectedUri)) {
+                        loadFileContent(selectedUri)
+                    } else {
+                        // Rimuovi il file dalla cronologia se non è più accessibile
+                        removeFromFileHistory(uriString)
+                        Toast.makeText(this, getString(R.string.error_loading_file), Toast.LENGTH_SHORT).show()
+                        // Ricarica la lista dei file recenti
+                        showRecentFilesDialog()
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                    Toast.makeText(this, getString(R.string.error_loading_file), Toast.LENGTH_SHORT).show()
+                }
             }
             .setNegativeButton(getString(R.string.cancel), null)
             .setNeutralButton(getString(R.string.clear_recent_files)) { _, _ ->
@@ -796,48 +837,104 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun getFileNameFromUri(uri: Uri): String {
-        var result: String? = null
-        if (uri.scheme == "content") {
-            val cursor: Cursor? = contentResolver.query(uri, null, null, null, null)
-            cursor?.use {
-                if (it.moveToFirst()) {
-                    val nameIndex = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                    if (nameIndex >= 0) {
-                        result = it.getString(nameIndex)
+        return try {
+            var result: String? = null
+            if (uri.scheme == "content") {
+                val cursor: Cursor? = contentResolver.query(uri, null, null, null, null)
+                cursor?.use {
+                    if (it.moveToFirst()) {
+                        val nameIndex = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                        if (nameIndex >= 0) {
+                            result = it.getString(nameIndex)
+                        }
                     }
                 }
             }
-        }
-        if (result == null) {
-            result = uri.path?.let {
+            if (result == null) {
+                result = uri.path?.let {
+                    val cut = it.lastIndexOf('/')
+                    if (cut != -1) {
+                        it.substring(cut + 1)
+                    } else {
+                        it
+                    }
+                } ?: uri.toString()
+            }
+            result ?: "File sconosciuto"
+        } catch (e: Exception) {
+            e.printStackTrace()
+            uri.path?.let {
                 val cut = it.lastIndexOf('/')
                 if (cut != -1) {
                     it.substring(cut + 1)
                 } else {
                     it
                 }
-            } ?: uri.toString()
+            } ?: "File sconosciuto"
         }
-        return result ?: "File sconosciuto"
     }
     
     private fun getFileDisplayName(uri: Uri): String {
-        var result: String? = null
-        if (uri.scheme == "content") {
-            val cursor: Cursor? = contentResolver.query(uri, null, null, null, null)
-            cursor?.use {
-                if (it.moveToFirst()) {
-                    val nameIndex = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                    if (nameIndex >= 0) {
-                        result = it.getString(nameIndex)
+        return try {
+            var result: String? = null
+            if (uri.scheme == "content") {
+                val cursor: Cursor? = contentResolver.query(uri, null, null, null, null)
+                cursor?.use {
+                    if (it.moveToFirst()) {
+                        val nameIndex = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                        if (nameIndex >= 0) {
+                            result = it.getString(nameIndex)
+                        }
                     }
                 }
             }
+            if (result == null) {
+                result = uri.path ?: uri.toString()
+            }
+            result ?: uri.toString()
+        } catch (e: Exception) {
+            e.printStackTrace()
+            uri.path ?: uri.toString()
         }
-        if (result == null) {
-            result = uri.path ?: uri.toString()
+    }
+    
+    private fun isUriValid(uri: Uri): Boolean {
+        return try {
+            if (uri.scheme == "content") {
+                // Prova ad aprire l'URI per verificare che sia ancora valido
+                val cursor: Cursor? = contentResolver.query(uri, null, null, null, null)
+                cursor?.use {
+                    it.moveToFirst()
+                } ?: false
+            } else if (uri.scheme == "file") {
+                // Per file URI, verifica che il file esista
+                val file = java.io.File(uri.path ?: "")
+                file.exists() && file.canRead()
+            } else {
+                // Per altri schemi, assumiamo che siano validi
+                true
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            false
         }
-        return result ?: uri.toString()
+    }
+    
+    private fun removeFromFileHistory(uriString: String) {
+        val fileHistory = getFileHistory()
+        val updatedHistory = fileHistory.filter { it.first != uriString }
+        // Salva la cronologia aggiornata
+        val historyJson = updatedHistory.joinToString("|") { "${it.first}::${it.second}" }
+        sharedPreferences.edit()
+            .putString("fileHistory", historyJson)
+            .apply()
+    }
+    
+    private fun saveFileHistory(history: List<Pair<String, String>>) {
+        val historyJson = history.joinToString("|") { "${it.first}::${it.second}" }
+        sharedPreferences.edit()
+            .putString("fileHistory", historyJson)
+            .apply()
     }
     
     private fun showClearRecentFilesDialog() {
@@ -1136,7 +1233,7 @@ class MainActivity : AppCompatActivity() {
         val creditsText = getString(R.string.credits_text)
         val textView = android.widget.TextView(this).apply {
             text = creditsText
-            setPadding(32, 16, 32, 16)
+            setPadding(32, 0, 32, 16)
             textSize = 14f
             Linkify.addLinks(this, Linkify.WEB_URLS)
             movementMethod = LinkMovementMethod.getInstance()

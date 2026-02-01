@@ -16,6 +16,7 @@ object FileUtils {
                 when (extension.lowercase()) {
                     "docx" -> readDocx(inputStream)
                     "pdf" -> readPdf(inputStream)
+                    "rtf" -> readRtf(inputStream)
                     else -> readPlainText(inputStream)
                 }
             }
@@ -55,6 +56,36 @@ object FileUtils {
         val text = stripper.getText(document)
         document.close()
         return text
+    }
+    
+    private fun readRtf(inputStream: java.io.InputStream): String {
+        // Legge il file RTF e rimuove i codici di formattazione
+        val reader = BufferedReader(InputStreamReader(inputStream, "UTF-8"))
+        val content = StringBuilder()
+        var line: String?
+        
+        while (reader.readLine().also { line = it } != null) {
+            content.append(line).append("\n")
+        }
+        
+        val rtfContent = content.toString()
+        
+        // Rimuove i codici RTF comuni
+        var cleanText = rtfContent
+            // Rimuove i comandi RTF principali
+            .replace(Regex("\\\\[a-z]+\\d*"), "") // \par, \b, \i, etc.
+            .replace(Regex("\\\\'[0-9a-fA-F]{2}"), "") // Caratteri esadecimali
+            .replace(Regex("\\\\[{}]"), "") // Parentesi graffe escape
+            .replace(Regex("\\{[^}]*\\}"), "") // Gruppi RTF
+            .replace(Regex("\\\\[^a-z{}'\\s]+"), "") // Altri comandi RTF
+            // Rimuove le parentesi graffe rimanenti
+            .replace("{", "")
+            .replace("}", "")
+            // Rimuove spazi multipli
+            .replace(Regex("\\s+"), " ")
+            .trim()
+        
+        return cleanText
     }
     
     fun getFileExtension(context: Context, uri: Uri): String {

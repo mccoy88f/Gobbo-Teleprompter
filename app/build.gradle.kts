@@ -1,6 +1,18 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+}
+
+// Carica le proprietà locali per la keystore
+val keystorePropertiesFile = rootProject.file("local.properties")
+val keystoreProperties = Properties()
+if (keystorePropertiesFile.exists()) {
+    FileInputStream(keystorePropertiesFile).use {
+        keystoreProperties.load(it)
+    }
 }
 
 android {
@@ -20,9 +32,9 @@ android {
     signingConfigs {
         create("release") {
             storeFile = file("../gobbo-release-key.jks")
-            storePassword = "gobbo123"
+            storePassword = keystoreProperties.getProperty("KEYSTORE_PASSWORD") ?: ""
             keyAlias = "gobbo"
-            keyPassword = "gobbo123"
+            keyPassword = keystoreProperties.getProperty("KEY_PASSWORD") ?: ""
         }
     }
     
