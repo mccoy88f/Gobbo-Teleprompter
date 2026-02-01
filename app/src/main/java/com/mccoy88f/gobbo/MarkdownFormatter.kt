@@ -1,9 +1,12 @@
 package com.mccoy88f.gobbo
 
 import android.text.SpannableString
+import android.text.SpannableStringBuilder
 import android.text.Spanned
 import android.text.style.StyleSpan
 import android.text.style.RelativeSizeSpan
+import android.text.style.StrikethroughSpan
+import android.text.style.TypefaceSpan
 import android.graphics.Typeface
 
 object MarkdownFormatter {
@@ -98,30 +101,21 @@ object MarkdownFormatter {
         return cleanSpannable
     }
     
+    /**
+     * Formatta Markdown per la visualizzazione: rimuove simboli (# ** * _ __ ~~ ` [](url) )
+     * e applica titoli, grassetto, corsivo, barrato, monospace, link (solo testo).
+     */
     fun formatMarkdownSimple(text: String): SpannableString {
-        val spannable = SpannableString(text)
-        
-        // Formatta i titoli (# ## ###)
+        val out = SpannableStringBuilder()
         val lines = text.split("\n")
-        var currentPos = 0
-        
-        lines.forEach { line ->
-            val headingMatch = Regex("^(#{1,6})\\s+(.+)$").find(line)
+        val headingRegex = Regex("^(#{1,6})\\s+(.+)$")
+
+        for ((i, line) in lines.withIndex()) {
+            val headingMatch = headingRegex.find(line)
             if (headingMatch != null) {
+                // Mostra solo il testo del titolo, senza i #
                 val level = headingMatch.groupValues[1].length
-                val content = headingMatch.groupValues[2]
-                val start = currentPos
-                val end = currentPos + line.length
-                
-                // Applica stile grassetto
-                spannable.setSpan(
-                    StyleSpan(Typeface.BOLD),
-                    start,
-                    end,
-                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-                )
-                
-                // Dimensione relativa
+                val content = headingMatch.groupValues[2].trim()
                 val sizeMultiplier = when (level) {
                     1 -> 1.8f
                     2 -> 1.5f
@@ -130,43 +124,127 @@ object MarkdownFormatter {
                     5 -> 1.1f
                     else -> 1.05f
                 }
-                spannable.setSpan(
-                    RelativeSizeSpan(sizeMultiplier),
-                    start,
-                    end,
-                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-                )
+                val start = out.length
+                out.append(content)
+                val end = out.length
+                if (start < end) {
+                    out.setSpan(StyleSpan(Typeface.BOLD), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    out.setSpan(RelativeSizeSpan(sizeMultiplier), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                }
+            } else {
+                // Righe normali: rimuovi ** e * / _ e applica stili
+                appendLineWithInlineFormatting(out, line)
             }
-            
-            // Formatta grassetto **testo**
-            val boldPattern = Regex("\\*\\*([^*]+?)\\*\\*")
-            boldPattern.findAll(line).forEach { matchResult ->
-                val matchStart = currentPos + matchResult.range.first
-                val matchEnd = currentPos + matchResult.range.last + 1
-                spannable.setSpan(
-                    StyleSpan(Typeface.BOLD),
-                    matchStart,
-                    matchEnd,
-                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-                )
-            }
-            
-            // Formatta corsivo *testo* (non **)
-            val italicPattern = Regex("(?<!\\*|_)\\*([^*]+?)\\*(?!\\*)|(?<!_|\\*)_([^_]+?)_(?!_)")
-            italicPattern.findAll(line).forEach { matchResult ->
-                val matchStart = currentPos + matchResult.range.first
-                val matchEnd = currentPos + matchResult.range.last + 1
-                spannable.setSpan(
-                    StyleSpan(Typeface.ITALIC),
-                    matchStart,
-                    matchEnd,
-                    Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
-                )
-            }
-            
-            currentPos += line.length + 1 // +1 per il newline
+            if (i < lines.size - 1) out.append("\n")
         }
-        
-        return spannable
+
+        return SpannableString(out)
+    }
+
+    /** Aggiunge una riga processando tutte le sintassi inline Markdown, senza mostrare i simboli. */
+    private fun appendLineWithInlineFormatting(out: SpannableStringBuilder, line: String) {
+        // Ordine: match più specifici per primi (***, __, **, ~~, `, [], *, _)
+        val boldItalicRegex = Regex("\\*\\*\\*([^*]+?)\\*\\*\\*")
+        val boldDoubleUnderscoreRegex = Regex("__(?![_\\s])([^_]+?)__(?!_)")
+        val boldRegex = Regex("\\*\\*([^*]+?)\\*\\*")
+        val strikethroughRegex = Regex("~~([^~]+?)~~")
+        val codeRegex = Regex("`([^`]+?)`")
+        val linkRegex = Regex("\\[([^\\]]+?)\\]\\([^)]*\\)")
+        val italicStarRegex = Regex("(?<!\\*)\\*([^*]+?)\\*(?!\\*)")
+        val italicUnderscoreRegex = Regex("(?<!_)_([^_]+?)_(?!_)")
+        var remaining = line
+
+        while (remaining.isNotEmpty()) {
+            val mBoldItalic = boldItalicRegex.find(remaining)
+            val mBoldUnd = boldDoubleUnderscoreRegex.find(remaining)
+            val mBold = boldRegex.find(remaining)
+            val mStrike = strikethroughRegex.find(remaining)
+            val mCode = codeRegex.find(remaining)
+            val mLink = linkRegex.find(remaining)
+            val mItalicStar = italicStarRegex.find(remaining)
+            val mItalicUnd = italicUnderscoreRegex.find(remaining)
+            val first = listOf(
+                mBoldItalic?.range?.first,
+                mBoldUnd?.range?.first,
+                mBold?.range?.first,
+                mStrike?.range?.first,
+                mCode?.range?.first,
+                mLink?.range?.first,
+                mItalicStar?.range?.first,
+                mItalicUnd?.range?.first
+            ).filterNotNull().minOrNull() ?: Int.MAX_VALUE
+
+            if (first == Int.MAX_VALUE) {
+                out.append(remaining)
+                break
+            }
+            if (first > 0) {
+                out.append(remaining.substring(0, first))
+                remaining = remaining.substring(first)
+            }
+            when {
+                mBoldItalic != null && remaining.startsWith("***") -> {
+                    val content = mBoldItalic.groupValues[1]
+                    val start = out.length
+                    out.append(content)
+                    val end = out.length
+                    out.setSpan(StyleSpan(Typeface.BOLD), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    out.setSpan(StyleSpan(Typeface.ITALIC), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    remaining = remaining.removePrefix("***$content***")
+                }
+                mBoldUnd != null && remaining.startsWith("__") -> {
+                    val content = mBoldUnd.groupValues[1]
+                    val start = out.length
+                    out.append(content)
+                    out.setSpan(StyleSpan(Typeface.BOLD), start, out.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    remaining = remaining.removePrefix("__${content}__")
+                }
+                mBold != null && remaining.startsWith("**") -> {
+                    val content = mBold.groupValues[1]
+                    val start = out.length
+                    out.append(content)
+                    out.setSpan(StyleSpan(Typeface.BOLD), start, out.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    remaining = remaining.removePrefix("**$content**")
+                }
+                mStrike != null && remaining.startsWith("~~") -> {
+                    val content = mStrike.groupValues[1]
+                    val start = out.length
+                    out.append(content)
+                    out.setSpan(StrikethroughSpan(), start, out.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    remaining = remaining.removePrefix("~~$content~~")
+                }
+                mCode != null && remaining.startsWith("`") -> {
+                    val content = mCode.groupValues[1]
+                    val start = out.length
+                    out.append(content)
+                    out.setSpan(TypefaceSpan("monospace"), start, out.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    remaining = remaining.removePrefix("`$content`")
+                }
+                mLink != null && remaining.startsWith("[") -> {
+                    val content = mLink.groupValues[1]
+                    val fullMatch = mLink.value
+                    out.append(content)
+                    remaining = remaining.removePrefix(fullMatch)
+                }
+                mItalicStar != null && remaining.startsWith("*") && !remaining.startsWith("**") -> {
+                    val content = mItalicStar.groupValues[1]
+                    val start = out.length
+                    out.append(content)
+                    out.setSpan(StyleSpan(Typeface.ITALIC), start, out.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    remaining = remaining.removePrefix("*$content*")
+                }
+                mItalicUnd != null && remaining.startsWith("_") && !remaining.startsWith("__") -> {
+                    val content = mItalicUnd.groupValues[1]
+                    val start = out.length
+                    out.append(content)
+                    out.setSpan(StyleSpan(Typeface.ITALIC), start, out.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    remaining = remaining.removePrefix("_${content}_")
+                }
+                else -> {
+                    out.append(remaining.take(1))
+                    remaining = remaining.drop(1)
+                }
+            }
+        }
     }
 }
