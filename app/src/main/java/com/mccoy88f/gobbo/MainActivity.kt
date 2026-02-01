@@ -165,7 +165,7 @@ class MainActivity : AppCompatActivity(), WebRemoteController {
             savedTextExtension = savedInstanceState.getString("savedTextExtension")
             // Ripristina il testo se salvato
             savedText?.let { text ->
-                if (text.isNotEmpty() && text != getString(R.string.enter_text)) {
+                if (text.isNotEmpty() && text != getString(R.string.empty_state_hint)) {
                     if (savedTextExtension?.lowercase() == "md") {
                         textView.text = MarkdownFormatter.formatMarkdownSimple(text)
                     } else {
@@ -363,7 +363,7 @@ class MainActivity : AppCompatActivity(), WebRemoteController {
         
         // Ripristina il testo salvato se presente
         savedText?.let { text ->
-            if (text.isNotEmpty() && text != getString(R.string.enter_text)) {
+            if (text.isNotEmpty() && text != getString(R.string.empty_state_hint)) {
                 // Se era un file Markdown, riformatta
                 if (savedTextExtension?.lowercase() == "md") {
                     textView.text = MarkdownFormatter.formatMarkdownSimple(text)
@@ -576,7 +576,7 @@ class MainActivity : AppCompatActivity(), WebRemoteController {
         if (isPlaying) {
             stopAutoScroll()
         } else {
-            if (textView.text.isNotEmpty() && textView.text != getString(R.string.enter_text)) {
+            if (textView.text.isNotEmpty() && textView.text != getString(R.string.empty_state_hint)) {
                 startAutoScroll()
             } else {
                 Toast.makeText(this, getString(R.string.no_text_loaded), Toast.LENGTH_SHORT).show()
@@ -904,7 +904,7 @@ class MainActivity : AppCompatActivity(), WebRemoteController {
     /** Conta le parole nel testo corrente (raw text, per calcolo WPM). */
     private fun countWords(): Int {
         val raw = savedText ?: textView.text?.toString().orEmpty()
-        if (raw.isEmpty() || raw == getString(R.string.enter_text)) return 0
+        if (raw.isEmpty() || raw == getString(R.string.empty_state_hint)) return 0
         return raw.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }.size
     }
     
@@ -992,24 +992,47 @@ class MainActivity : AppCompatActivity(), WebRemoteController {
     }
     
     private fun showNewDocument() {
-        currentImportedFileId = null
-        currentFileUri = null
-        savedText = ""
-        savedTextExtension = ""
-        sharedPreferences.edit()
-            .putString("savedText", "")
-            .putString("savedTextExtension", "")
-            .remove("currentImportedFileId")
-            .remove("currentFileUri")
-            .remove("currentFileExtension")
-            .apply()
-        textView.text = getString(R.string.enter_text)
-        scrollView.post { updateWpmDisplay() }
-        Toast.makeText(this, getString(R.string.new_document), Toast.LENGTH_SHORT).show()
+        val dialogView = layoutInflater.inflate(R.layout.dialog_new_document, null)
+        val editName = dialogView.findViewById<TextInputEditText>(R.id.newDocName)
+        val editContent = dialogView.findViewById<TextInputEditText>(R.id.newDocContent)
+        val newDocDialog = MaterialAlertDialogBuilder(this)
+            .setTitle(getString(R.string.new_document_title))
+            .setView(dialogView)
+            .setPositiveButton(getString(R.string.save), null)
+            .setNegativeButton(getString(R.string.cancel), null)
+            .create()
+        newDocDialog.setOnShowListener {
+            newDocDialog.getButton(androidx.appcompat.app.AlertDialog.BUTTON_POSITIVE)?.setOnClickListener {
+                var name = editName.text?.toString()?.trim() ?: ""
+                val content = editContent.text?.toString() ?: ""
+                if (name.isEmpty()) {
+                    Toast.makeText(this, getString(R.string.new_document_name_hint), Toast.LENGTH_SHORT).show()
+                    return@setOnClickListener
+                }
+                if (!name.lowercase().endsWith(".md")) name += ".md"
+                val id = saveImportedFile(content, name, "md")
+                currentImportedFileId = id
+                savedText = content
+                savedTextExtension = "md"
+                sharedPreferences.edit()
+                    .putString("savedText", content)
+                    .putString("savedTextExtension", "md")
+                    .putString("currentImportedFileId", id)
+                    .remove("currentFileUri")
+                    .remove("currentFileExtension")
+                    .apply()
+                textView.text = MarkdownFormatter.formatMarkdownSimple(content)
+                scrollView.scrollTo(0, 0)
+                scrollView.post { updateWpmDisplay() }
+                Toast.makeText(this, getString(R.string.document_created), Toast.LENGTH_SHORT).show()
+                newDocDialog.dismiss()
+            }
+        }
+        newDocDialog.show()
     }
     
     private fun showImportedFilesDialog() {
-        val list = getImportedFileList()
+        val list = getImportedFileList().toMutableList()
         if (list.isEmpty()) {
             MaterialAlertDialogBuilder(this)
                 .setTitle(getString(R.string.imported_files))
@@ -1018,15 +1041,38 @@ class MainActivity : AppCompatActivity(), WebRemoteController {
                 .show()
             return
         }
-        val names = list.map { it.second }
-        MaterialAlertDialogBuilder(this)
+        val listView = android.widget.ListView(this)
+        val dialog = MaterialAlertDialogBuilder(this)
             .setTitle(getString(R.string.imported_files))
-            .setItems(names.toTypedArray()) { _, which ->
-                val (id, _, ext) = list[which]
-                openImportedFile(id, ext)
-            }
+            .setView(listView)
             .setNegativeButton(getString(R.string.cancel), null)
-            .show()
+            .create()
+        val adapter = object : android.widget.BaseAdapter() {
+            override fun getCount() = list.size
+            override fun getItem(position: Int) = list[position]
+            override fun getItemId(position: Int) = position.toLong()
+            override fun getView(position: Int, convertView: android.view.View?, parent: android.view.ViewGroup): android.view.View {
+                val view = convertView ?: layoutInflater.inflate(R.layout.item_imported_file, parent, false)
+                val item = list[position]
+                view.findViewById<android.widget.TextView>(R.id.itemFileName).text = item.second
+                view.findViewById<MaterialButton>(R.id.itemDeleteBtn).setOnClickListener {
+                    MaterialAlertDialogBuilder(this@MainActivity)
+                        .setMessage(getString(R.string.delete_file_confirm, item.second))
+                        .setPositiveButton(getString(R.string.ok)) { _, _ ->
+                            removeImportedFile(item.first)
+                            list.removeAll { it.first == item.first }
+                            notifyDataSetChanged()
+                            if (list.isEmpty()) dialog.dismiss()
+                        }
+                        .setNegativeButton(getString(R.string.cancel), null)
+                        .show()
+                }
+                view.setOnClickListener { openImportedFile(item.first, item.third); dialog.dismiss() }
+                return view
+            }
+        }
+        listView.adapter = adapter
+        dialog.show()
     }
     
     private fun openImportedFile(id: String, extension: String) {
@@ -2226,6 +2272,27 @@ class MainActivity : AppCompatActivity(), WebRemoteController {
             val file = File(getImportedFilesDir(), id)
             if (file.exists()) file.readText(Charsets.UTF_8) else null
         } catch (_: Exception) { null }
+    }
+    
+    /** Rimuove il file importato dalla lista e dal disco. */
+    private fun removeImportedFile(id: String) {
+        val list = getImportedFileList().filter { it.first != id }
+        saveImportedFileList(list)
+        try {
+            File(getImportedFilesDir(), id).delete()
+        } catch (_: Exception) { }
+        if (currentImportedFileId == id) {
+            currentImportedFileId = null
+            savedText = ""
+            savedTextExtension = ""
+            sharedPreferences.edit()
+                .remove("currentImportedFileId")
+                .putString("savedText", "")
+                .putString("savedTextExtension", "")
+                .apply()
+            textView.text = getString(R.string.empty_state_hint)
+            scrollView.post { updateWpmDisplay() }
+        }
     }
     
     override fun onDestroy() {
