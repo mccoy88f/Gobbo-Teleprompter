@@ -30,7 +30,7 @@
     <string name="settings">Impostazioni</string>
     <string name="remote_settings">Impostazioni Telecomando</string>
     <string name="credits">Credits</string>
-    <string name="credits_text">Gobbo Teleprompter\n\nAutore: McCoy88f\nNome: Antonello Migliorelli\n\nVersione: 1.0.0\n\nUn teleprompter professionale per Android\n\nRepository:\nhttps://github.com/mccoy88f/Gobbo-Teleprompter</string>
+    <string name="credits_text">Gobbo Teleprompter\n\nAutore: McCoy88f\nNome: Antonello Migliorelli\n\nVersione: 1.1.0\n\nUn teleprompter professionale per Android\n\nRepository:\nhttps://github.com/mccoy88f/Gobbo-Teleprompter</string>
     <string name="customize_remote">Personalizza Telecomando</string>
     <string name="remote_key">Pulsante</string>
     <string name="remote_action">Azione</string>
