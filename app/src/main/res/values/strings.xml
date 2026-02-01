@@ -29,8 +29,19 @@
     <string name="no_recent_files">Nessun file recente</string>
     <string name="settings">Impostazioni</string>
     <string name="remote_settings">Impostazioni Telecomando</string>
-    <string name="credits">Credits</string>
-    <string name="credits_text">Gobbo Teleprompter\n\nAutore: McCoy88f\nNome: Antonello Migliorelli\n\nVersione: 1.1.0\n\nUn teleprompter professionale per Android\n\nRepository:\nhttps://github.com/mccoy88f/Gobbo-Teleprompter</string>
+    <string name="credits">Informazioni Applicazione</string>
+    <string name="credits_text">Gobbo Teleprompter\n\nAutore: McCoy88f\nNome: Antonello Migliorelli\n\nVersione: 1.2.0\n\nUn teleprompter professionale per Android\n\nRepository:\nhttps://github.com/mccoy88f/Gobbo-Teleprompter</string>
+    <string name="check_updates">Verifica Aggiornamenti</string>
+    <string name="checking_updates">Verifica aggiornamenti in corso…</string>
+    <string name="update_available">Aggiornamento Disponibile</string>
+    <string name="update_available_message">È disponibile una nuova versione: %1$s\n\nVuoi scaricarla ora?</string>
+    <string name="no_update_available">Nessun aggiornamento disponibile</string>
+    <string name="no_update_message">Stai già usando l\'ultima versione disponibile.</string>
+    <string name="update_error">Errore durante la verifica degli aggiornamenti</string>
+    <string name="download_update">Scarica Aggiornamento</string>
+    <string name="downloading">Download in corso…</string>
+    <string name="download_complete">Download completato</string>
+    <string name="install_update">Installa</string>
     <string name="customize_remote">Personalizza Telecomando</string>
     <string name="remote_key">Pulsante</string>
     <string name="remote_action">Azione</string>
@@ -71,4 +82,9 @@
     <string name="select_click_type">Seleziona il tipo di click:</string>
     <string name="single_click">Click Singolo</string>
     <string name="double_click">Doppio Click</string>
+    <string name="cast">Cast</string>
+    <string name="cast_to_device">Trasmetti su dispositivo</string>
+    <string name="no_cast_devices">Nessun dispositivo Cast trovato</string>
+    <string name="cast_connected">Connesso a: %1$s</string>
+    <string name="cast_disconnected">Disconnesso da Cast</string>
 </resources>

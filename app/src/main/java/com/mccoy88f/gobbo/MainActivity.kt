@@ -30,6 +30,16 @@ import android.net.Uri
 import androidx.preference.PreferenceManager.getDefaultSharedPreferences
 import android.provider.OpenableColumns
 import android.database.Cursor
+import android.content.pm.PackageInstaller
+import android.net.ConnectivityManager
+import android.os.Environment
+import android.app.DownloadManager
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.IntentFilter
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
 
 class MainActivity : AppCompatActivity() {
     
@@ -57,6 +67,8 @@ class MainActivity : AppCompatActivity() {
     private var progressDialog: androidx.appcompat.app.AlertDialog? = null
     private lateinit var sharedPreferences: SharedPreferences
     private var currentFileUri: String? = null
+    private var downloadId: Long = -1
+    private var downloadReceiver: BroadcastReceiver? = null
     private var volumeKeyRunnable: Runnable? = null
     private var isVolumeKeyPressed = false
     private var volumeKeyDirection = 0 // 1 = su, -1 = giù
@@ -92,7 +104,7 @@ class MainActivity : AppCompatActivity() {
     }
     
     private val filePickerLauncher = registerForActivityResult(
-        ActivityResultContracts.GetContent()
+        ActivityResultContracts.OpenDocument()
     ) { uri ->
         uri?.let {
             loadFileContent(it)
@@ -299,7 +311,16 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun openFilePicker() {
-        filePickerLauncher.launch("*/*")
+        // Limita ai tipi di file supportati
+        val mimeTypes = arrayOf(
+            "text/plain",                    // .txt
+            "text/markdown",                 // .md
+            "application/rtf",               // .rtf
+            "text/rtf",                      // .rtf (alternativo)
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document", // .docx
+            "application/pdf"                // .pdf
+        )
+        filePickerLauncher.launch(mimeTypes)
     }
     
     private fun loadFileContent(uri: android.net.Uri) {
@@ -770,18 +791,9 @@ class MainActivity : AppCompatActivity() {
         val items = validHistory.map { entry ->
             val uri = Uri.parse(entry.first)
             val fileName = getFileNameFromUri(uri)
-            // Ottieni il percorso in modo più leggibile
-            val filePath = try {
-                val displayName = getFileDisplayName(uri)
-                if (displayName.length > 50) {
-                    "..." + displayName.takeLast(47)
-                } else {
-                    displayName
-                }
-            } catch (e: Exception) {
-                uri.toString()
-            }
-            Pair(fileName, filePath)
+            // Ottieni il percorso della cartella
+            val folderPath = getFolderPathFromUri(uri)
+            Pair(fileName, folderPath)
         }
         
         // Crea un adapter personalizzato per mostrare nome e percorso su righe separate
@@ -799,9 +811,15 @@ class MainActivity : AppCompatActivity() {
                 val text2 = view.findViewById<android.widget.TextView>(android.R.id.text2)
                 
                 text1.text = item.first
-                text2.text = item.second
-                text2.textSize = 12f
-                text2.setTextColor(androidx.core.content.ContextCompat.getColor(this@MainActivity, android.R.color.darker_gray))
+                // Mostra il percorso della cartella solo se disponibile
+                if (item.second.isNotEmpty()) {
+                    text2.text = item.second
+                    text2.textSize = 12f
+                    text2.setTextColor(androidx.core.content.ContextCompat.getColor(this@MainActivity, android.R.color.darker_gray))
+                    text2.visibility = android.view.View.VISIBLE
+                } else {
+                    text2.visibility = android.view.View.GONE
+                }
                 
                 return view
             }
@@ -895,6 +913,74 @@ class MainActivity : AppCompatActivity() {
         } catch (e: Exception) {
             e.printStackTrace()
             uri.path ?: uri.toString()
+        }
+    }
+    
+    private fun getFolderPathFromUri(uri: Uri): String {
+        return try {
+            when (uri.scheme) {
+                "file" -> {
+                    // Per URI file://, estrai il percorso della cartella
+                    val path = uri.path
+                    if (path != null) {
+                        val file = java.io.File(path)
+                        val parent = file.parent
+                        if (parent != null) {
+                            // Accorcia il percorso se troppo lungo
+                            if (parent.length > 50) {
+                                "..." + parent.takeLast(47)
+                            } else {
+                                parent
+                            }
+                        } else {
+                            ""
+                        }
+                    } else {
+                        ""
+                    }
+                }
+                "content" -> {
+                    // Per URI content://, prova a ottenere il percorso usando ContentResolver
+                    try {
+                        val cursor = contentResolver.query(uri, null, null, null, null)
+                        cursor?.use {
+                            if (it.moveToFirst()) {
+                                // Prova a ottenere il percorso completo usando MediaStore.DATA
+                                val pathIndex = it.getColumnIndex(android.provider.MediaStore.MediaColumns.DATA)
+                                if (pathIndex >= 0) {
+                                    val fullPath = it.getString(pathIndex)
+                                    if (fullPath != null && fullPath.isNotEmpty()) {
+                                        val file = java.io.File(fullPath)
+                                        val parent = file.parent
+                                        if (parent != null) {
+                                            if (parent.length > 50) {
+                                                "..." + parent.takeLast(47)
+                                            } else {
+                                                parent
+                                            }
+                                        } else {
+                                            ""
+                                        }
+                                    } else {
+                                        ""
+                                    }
+                                } else {
+                                    ""
+                                }
+                            } else {
+                                ""
+                            }
+                        } ?: ""
+                    } catch (e: Exception) {
+                        // Se non riesce a ottenere il percorso, ritorna stringa vuota
+                        ""
+                    }
+                }
+                else -> ""
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            ""
         }
     }
     
@@ -1230,20 +1316,281 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun showCreditsDialog() {
-        val creditsText = getString(R.string.credits_text)
-        val textView = android.widget.TextView(this).apply {
-            text = creditsText
-            setPadding(32, 0, 32, 16)
-            textSize = 14f
-            Linkify.addLinks(this, Linkify.WEB_URLS)
-            movementMethod = LinkMovementMethod.getInstance()
+        try {
+            val creditsText = getString(R.string.credits_text)
+            val dialogView = layoutInflater.inflate(R.layout.dialog_credits, null)
+            val textView = dialogView.findViewById<android.widget.TextView>(R.id.creditsText)
+            
+            textView.text = creditsText
+            textView.textSize = 14f
+            Linkify.addLinks(textView, Linkify.WEB_URLS)
+            textView.movementMethod = LinkMovementMethod.getInstance()
+            
+            // Il MaterialAlertDialogBuilder ha un padding di 24dp per il contenuto
+            // Il titolo ha un padding di 24dp a sinistra, quindi il testo deve avere lo stesso padding
+            // Ma il TextView nel layout ha già padding 0, quindi il dialog aggiungerà il suo padding
+            // Per allineare con il titolo, dobbiamo rimuovere il padding aggiuntivo del dialog
+            val dialog = MaterialAlertDialogBuilder(this)
+                .setTitle(getString(R.string.credits))
+                .setView(dialogView)
+                .setPositiveButton(getString(R.string.ok), null)
+                .setNeutralButton(getString(R.string.check_updates)) { _, _ ->
+                    try {
+                        checkForUpdates()
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                        Toast.makeText(this@MainActivity, "Errore: ${e.message}", Toast.LENGTH_LONG).show()
+                    }
+                }
+                .create()
+            
+            dialog.show()
+            
+            // Il padding è già impostato nel layout XML, non serve modificarlo dinamicamente
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Toast.makeText(this, "Errore nel dialog: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+    
+    private fun checkForUpdates() {
+        try {
+            // Mostra dialog di caricamento
+            val progressView = layoutInflater.inflate(R.layout.dialog_progress, null)
+            val progressText = progressView.findViewById<android.widget.TextView>(R.id.progressText)
+            progressText?.text = getString(R.string.checking_updates)
+            
+            val updateDialog = MaterialAlertDialogBuilder(this)
+                .setView(progressView)
+                .setCancelable(false)
+                .create()
+            updateDialog.show()
+            
+            // Esegui la verifica in un thread separato
+            Thread {
+                try {
+                    val currentVersion = packageManager.getPackageInfo(packageName, 0).versionName
+                    val latestVersion = getLatestVersionFromGitHub()
+                    
+                    runOnUiThread {
+                        try {
+                            updateDialog.dismiss()
+                            
+                            if (latestVersion != null && isNewerVersion(latestVersion, currentVersion)) {
+                                // Nuova versione disponibile
+                                MaterialAlertDialogBuilder(this@MainActivity)
+                                    .setTitle(getString(R.string.update_available))
+                                    .setMessage(getString(R.string.update_available_message, latestVersion))
+                                    .setPositiveButton(getString(R.string.download_update)) { _, _ ->
+                                        downloadUpdate(latestVersion)
+                                    }
+                                    .setNegativeButton(getString(R.string.cancel), null)
+                                    .show()
+                            } else {
+                                // Nessun aggiornamento disponibile
+                                MaterialAlertDialogBuilder(this@MainActivity)
+                                    .setTitle(getString(R.string.no_update_available))
+                                    .setMessage(getString(R.string.no_update_message))
+                                    .setPositiveButton(getString(R.string.ok), null)
+                                    .show()
+                            }
+                        } catch (e: Exception) {
+                            e.printStackTrace()
+                            Toast.makeText(this@MainActivity, "Errore UI: ${e.message}", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                    runOnUiThread {
+                        try {
+                            updateDialog.dismiss()
+                            MaterialAlertDialogBuilder(this@MainActivity)
+                                .setTitle(getString(R.string.update_error))
+                                .setMessage(e.message ?: "Errore sconosciuto")
+                                .setPositiveButton(getString(R.string.ok), null)
+                                .show()
+                        } catch (uiException: Exception) {
+                            uiException.printStackTrace()
+                            Toast.makeText(this@MainActivity, "Errore: ${e.message}", Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }
+            }.start()
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Toast.makeText(this, "Errore iniziale: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+    
+    private fun getLatestVersionFromGitHub(): String? {
+        return try {
+            val url = URL("https://api.github.com/repos/mccoy88f/Gobbo-Teleprompter/releases/latest")
+            val connection = url.openConnection() as HttpURLConnection
+            connection.requestMethod = "GET"
+            connection.connectTimeout = 10000
+            connection.readTimeout = 10000
+            
+            val responseCode = connection.responseCode
+            if (responseCode == HttpURLConnection.HTTP_OK) {
+                val response = connection.inputStream.bufferedReader().use { it.readText() }
+                val json = JSONObject(response)
+                val tagName = json.getString("tag_name")
+                // Rimuovi il prefisso "v" se presente (es. "v1.1.0" -> "1.1.0")
+                tagName.removePrefix("v")
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            null
+        }
+    }
+    
+    private fun isNewerVersion(latest: String, current: String): Boolean {
+        val latestParts = latest.split(".").map { it.toIntOrNull() ?: 0 }
+        val currentParts = current.split(".").map { it.toIntOrNull() ?: 0 }
+        
+        for (i in 0 until maxOf(latestParts.size, currentParts.size)) {
+            val latestPart = latestParts.getOrElse(i) { 0 }
+            val currentPart = currentParts.getOrElse(i) { 0 }
+            
+            if (latestPart > currentPart) return true
+            if (latestPart < currentPart) return false
         }
         
+        return false
+    }
+    
+    private fun downloadUpdate(version: String) {
+        // Mostra dialog di download
+        val progressView = layoutInflater.inflate(R.layout.dialog_progress, null)
+        val progressText = progressView.findViewById<android.widget.TextView>(R.id.progressText)
+        progressText?.text = getString(R.string.downloading)
+        
+        val downloadDialog = MaterialAlertDialogBuilder(this)
+            .setView(progressView)
+            .setCancelable(false)
+            .create()
+        downloadDialog.show()
+        
+        Thread {
+            try {
+                // Ottieni l'URL dell'APK dalla release GitHub
+                val url = URL("https://api.github.com/repos/mccoy88f/Gobbo-Teleprompter/releases/latest")
+                val connection = url.openConnection() as HttpURLConnection
+                connection.requestMethod = "GET"
+                connection.connectTimeout = 10000
+                connection.readTimeout = 10000
+                
+                val response = connection.inputStream.bufferedReader().use { it.readText() }
+                val json = JSONObject(response)
+                val assets = json.getJSONArray("assets")
+                
+                var apkUrl: String? = null
+                for (i in 0 until assets.length()) {
+                    val asset = assets.getJSONObject(i)
+                    val name = asset.getString("name")
+                    if (name.endsWith(".apk")) {
+                        apkUrl = asset.getString("browser_download_url")
+                        break
+                    }
+                }
+                
+                if (apkUrl != null) {
+                    runOnUiThread {
+                        downloadDialog.dismiss()
+                        // Usa DownloadManager per scaricare l'APK
+                        val downloadManager = getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+                        val request = DownloadManager.Request(Uri.parse(apkUrl))
+                            .setTitle("Gobbo Teleprompter $version")
+                            .setDescription("Downloading update")
+                            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                            .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "Gobbo-Teleprompter-$version.apk")
+                            .setAllowedOverMetered(true)
+                            .setAllowedOverRoaming(true)
+                        
+                        downloadId = downloadManager.enqueue(request)
+                        
+                        // Registra un receiver per quando il download è completato
+                        val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
+                        downloadReceiver = object : BroadcastReceiver() {
+                            override fun onReceive(context: Context?, intent: Intent?) {
+                                val id = intent?.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1)
+                                if (id == downloadId) {
+                                    showInstallDialog(version)
+                                    try {
+                                        unregisterReceiver(this)
+                                    } catch (e: Exception) {
+                                        // Già rimosso
+                                    }
+                                    downloadReceiver = null
+                                }
+                            }
+                        }
+                        registerReceiver(downloadReceiver, filter)
+                        
+                        Toast.makeText(this, getString(R.string.downloading), Toast.LENGTH_SHORT).show()
+                    }
+                } else {
+                    runOnUiThread {
+                        downloadDialog.dismiss()
+                        Toast.makeText(this, getString(R.string.update_error), Toast.LENGTH_SHORT).show()
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                runOnUiThread {
+                    downloadDialog.dismiss()
+                    Toast.makeText(this, getString(R.string.update_error), Toast.LENGTH_SHORT).show()
+                }
+            }
+        }.start()
+    }
+    
+    private fun showInstallDialog(version: String) {
         MaterialAlertDialogBuilder(this)
-            .setTitle(getString(R.string.credits))
-            .setView(textView)
-            .setPositiveButton(getString(R.string.ok), null)
+            .setTitle(getString(R.string.download_complete))
+            .setMessage("L'aggiornamento $version è stato scaricato. Vuoi installarlo ora?")
+            .setPositiveButton(getString(R.string.install_update)) { _, _ ->
+                installUpdate(version)
+            }
+            .setNegativeButton(getString(R.string.cancel), null)
             .show()
+    }
+    
+    private fun installUpdate(version: String) {
+        try {
+            val file = java.io.File(
+                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS),
+                "Gobbo-Teleprompter-$version.apk"
+            )
+            
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                val contentUri = androidx.core.content.FileProvider.getUriForFile(
+                    this,
+                    "${packageName}.fileprovider",
+                    file
+                )
+                val installIntent = Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(contentUri, "application/vnd.android.package-archive")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                startActivity(installIntent)
+            } else {
+                val installIntent = Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(
+                        Uri.fromFile(file),
+                        "application/vnd.android.package-archive"
+                    )
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                startActivity(installIntent)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Toast.makeText(this, getString(R.string.update_error), Toast.LENGTH_SHORT).show()
+        }
     }
     
     private fun saveCurrentFile(uri: String, extension: String) {
@@ -1336,4 +1683,5 @@ class MainActivity : AppCompatActivity() {
         toolbarHideHandler?.removeCallbacksAndMessages(null)
         progressDialog?.dismiss()
     }
+    
 }
