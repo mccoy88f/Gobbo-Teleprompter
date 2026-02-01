@@ -69,13 +69,6 @@ class MainActivity : AppCompatActivity() {
     private var currentFileUri: String? = null
     private var downloadId: Long = -1
     private var downloadReceiver: BroadcastReceiver? = null
-    private var volumeKeyRunnable: Runnable? = null
-    private var isVolumeKeyPressed = false
-    private var volumeKeyDirection = 0 // 1 = su, -1 = giù
-    private var lastVolumeKeyPressTime = 0L
-    private var lastVolumeKeyCode = 0
-    private var lastTabPressTime = 0L
-    private val DOUBLE_CLICK_TIME_DELTA = 300 // millisecondi
     
     
     // Remote control mappings
@@ -86,7 +79,6 @@ class MainActivity : AppCompatActivity() {
     
     private data class RemoteKeyMapping(
         val keyCode: Int,
-        val isDoubleClick: Boolean,
         val action: RemoteAction
     )
     
@@ -113,15 +105,32 @@ class MainActivity : AppCompatActivity() {
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
         
-        // Inizializza SharedPreferences
+        // Inizializza SharedPreferences PRIMA di setContentView
         sharedPreferences = getDefaultSharedPreferences(this)
+        
+        // Carica solo isDarkMode PRIMA di setContentView per applicare il tema correttamente
+        isDarkMode = sharedPreferences.getBoolean("isDarkMode", false)
+        // Applica il tema salvato solo se necessario (evita ricreazioni inutili)
+        val currentNightMode = AppCompatDelegate.getDefaultNightMode()
+        val targetNightMode = if (isDarkMode) {
+            AppCompatDelegate.MODE_NIGHT_YES
+        } else {
+            AppCompatDelegate.MODE_NIGHT_NO
+        }
+        // Applica il tema solo se è diverso da quello corrente
+        if (currentNightMode != targetNightMode) {
+            AppCompatDelegate.setDefaultNightMode(targetNightMode)
+        }
+        
+        setContentView(R.layout.activity_main)
         
         // Configura la toolbar standard con i pulsanti
         supportActionBar?.let {
             it.setDisplayShowTitleEnabled(true)
             it.title = getString(R.string.app_name)
+            // Forza la visibilità della toolbar
+            it.show()
         }
         
         initViews()
@@ -147,6 +156,46 @@ class MainActivity : AppCompatActivity() {
         }
         
         handleIntent(intent)
+        
+        // Assicurati che la toolbar sia sempre visibile dopo la ricreazione (es. cambio tema)
+        // A meno che non sia in modalità di riproduzione
+        // Mostra la toolbar immediatamente e anche dopo diversi delay per sicurezza
+        // Questo è necessario perché l'Activity può essere ricreata più volte all'avvio
+        if (!isPlaying) {
+            showToolbar()
+        }
+        // Primo delay per la prima ricreazione
+        Handler(Looper.getMainLooper()).postDelayed({
+            if (!isPlaying) {
+                showToolbar()
+            }
+        }, 200)
+        // Secondo delay per eventuali ricreazioni successive
+        Handler(Looper.getMainLooper()).postDelayed({
+            if (!isPlaying) {
+                showToolbar()
+            }
+        }, 500)
+    }
+    
+    override fun onResume() {
+        super.onResume()
+        // Assicurati che la toolbar sia sempre visibile quando l'Activity riprende
+        // Questo è importante dopo le ricreazioni (es. cambio tema)
+        // A meno che non sia in modalità di riproduzione
+        if (!isPlaying) {
+            showToolbar()
+        }
+        Handler(Looper.getMainLooper()).postDelayed({
+            if (!isPlaying) {
+                showToolbar()
+            }
+        }, 100) // Delay per assicurarsi che tutto sia inizializzato
+        Handler(Looper.getMainLooper()).postDelayed({
+            if (!isPlaying) {
+                showToolbar()
+            }
+        }, 300) // Delay più lungo per eventuali ricreazioni successive
     }
     
     override fun onSaveInstanceState(outState: Bundle) {
@@ -192,12 +241,22 @@ class MainActivity : AppCompatActivity() {
         textSizeSlider = findViewById(R.id.textSizeSlider)
         controlsLayout = findViewById(R.id.controlsLayout)
         
+        // Disabilita la navigazione con Tab per i controlli
+        // Questo impedisce che Tab cambi il focus tra i controlli
+        btnPlayPause.isFocusable = false
+        btnScrollMode.isFocusable = false
+        speedSlider.isFocusable = false
+        textSizeSlider.isFocusable = false
+        controlsLayout.isFocusable = false
+        controlsLayout.isFocusableInTouchMode = false
+        scrollView.isFocusable = false
+        
         scrollHandler = Handler(Looper.getMainLooper())
         volumeKeyHandler = Handler(Looper.getMainLooper())
         toolbarHideHandler = Handler(Looper.getMainLooper())
         textView.textSize = currentTextSize
         textView.isClickable = true
-        textView.isFocusable = true
+        textView.isFocusable = false // Disabilita focus per evitare che Tab cambi il focus
         
         // Ripristina il testo salvato se presente
         savedText?.let { text ->
@@ -215,7 +274,7 @@ class MainActivity : AppCompatActivity() {
         speedSlider.stepSize = 1f
         textSizeSlider.stepSize = 2f
         
-        // Carica impostazioni salvate
+        // Carica impostazioni salvate (tranne isDarkMode che è già stato caricato)
         loadSettings()
         
         // Inizializza modalità scorrimento
@@ -324,6 +383,30 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun loadFileContent(uri: android.net.Uri) {
+        // Controlla la dimensione del file prima di caricarlo
+        val fileSize = getFileSize(uri)
+        val maxFileSize = 50 * 1024 * 1024 // 50MB in bytes
+        
+        if (fileSize > maxFileSize) {
+            // Mostra avviso per file troppo grande
+            val fileSizeMB = String.format("%.2f", fileSize / (1024.0 * 1024.0))
+            MaterialAlertDialogBuilder(this)
+                .setTitle(getString(R.string.file_too_large))
+                .setMessage(getString(R.string.file_too_large_message, "${fileSizeMB} MB"))
+                .setPositiveButton(getString(R.string.continue_anyway)) { _, _ ->
+                    // Procedi con il caricamento
+                    loadFileContentInternal(uri)
+                }
+                .setNegativeButton(getString(R.string.cancel), null)
+                .show()
+            return
+        }
+        
+        // Se il file è di dimensioni accettabili, carica direttamente
+        loadFileContentInternal(uri)
+    }
+    
+    private fun loadFileContentInternal(uri: android.net.Uri) {
         // Mostra dialog di caricamento
         val progressView = layoutInflater.inflate(R.layout.dialog_progress, null)
         progressDialog = MaterialAlertDialogBuilder(this)
@@ -440,8 +523,21 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun showToolbar() {
-        supportActionBar?.show()
-        isToolbarVisible = true
+        supportActionBar?.let {
+            it.show()
+            isToolbarVisible = true
+        } ?: run {
+            // Se supportActionBar è null, proviamo a forzare la creazione
+            // Questo può accadere se l'Activity viene ricreata durante il cambio tema
+            Handler(Looper.getMainLooper()).postDelayed({
+                supportActionBar?.let { actionBar ->
+                    actionBar.setDisplayShowTitleEnabled(true)
+                    actionBar.title = getString(R.string.app_name)
+                    actionBar.show()
+                    isToolbarVisible = true
+                }
+            }, 100)
+        }
     }
     
     private fun toggleToolbarVisibility() {
@@ -466,6 +562,9 @@ class MainActivity : AppCompatActivity() {
         // Il testo verrà ripristinato automaticamente in onCreate dopo la ricreazione
         
         isDarkMode = !isDarkMode
+        // Salva lo stato del tema prima della ricreazione
+        saveSettings()
+        
         if (isDarkMode) {
             AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
         } else {
@@ -536,25 +635,38 @@ class MainActivity : AppCompatActivity() {
     }
     
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        if (event?.action == KeyEvent.ACTION_DOWN) {
-            // Per i tasti volume, lascia che handleVolumeKey gestisca tutto (incluso doppio click)
-            when (keyCode) {
-                KeyEvent.KEYCODE_VOLUME_UP -> {
-                    handleVolumeKey(KeyEvent.KEYCODE_VOLUME_UP, 1)
-                    return true
+        if (event?.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+            // Gestisci Tab PRIMA di tutto, come i tasti volume, per evitare che Android lo usi per la navigazione
+            if (keyCode == KeyEvent.KEYCODE_TAB) {
+                val mapping = findRemoteMapping(KeyEvent.KEYCODE_TAB)
+                // Se la mappatura è CHANGE_SCROLL_MODE (comportamento errato), usa Play/Pause invece
+                if (mapping != null && mapping.action != RemoteAction.CHANGE_SCROLL_MODE) {
+                    executeRemoteAction(mapping.action)
+                } else {
+                    // Default: Play/Pause (anche se c'è una mappatura errata)
+                    togglePlayPause()
                 }
-                KeyEvent.KEYCODE_VOLUME_DOWN -> {
-                    handleVolumeKey(KeyEvent.KEYCODE_VOLUME_DOWN, -1)
-                    return true
-                }
-                KeyEvent.KEYCODE_TAB -> {
-                    handleTabKey()
-                    return true
-                }
+                return true // Consuma l'evento, impedendo la navigazione di default
             }
             
-            // Per gli altri tasti, cerca una mappatura personalizzata
-            val mapping = findRemoteMapping(keyCode, false)
+            // Gestisci i tasti volume come Tab
+            if (keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+                val mapping = findRemoteMapping(keyCode)
+                if (mapping != null) {
+                    executeRemoteAction(mapping.action)
+                } else {
+                    // Fallback al comportamento predefinito
+                    if (keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
+                        adjustSpeed(1)
+                    } else {
+                        adjustSpeed(-1)
+                    }
+                }
+                return true // Consuma l'evento, impedendo la modifica del volume di sistema
+            }
+            
+            // Cerca una mappatura personalizzata per gli altri tasti
+            val mapping = findRemoteMapping(keyCode)
             if (mapping != null) {
                 executeRemoteAction(mapping.action)
                 return true
@@ -570,23 +682,54 @@ class MainActivity : AppCompatActivity() {
                     scrollByMode(1)
                     return true
                 }
+                KeyEvent.KEYCODE_DPAD_LEFT -> {
+                    adjustTextSize(-1)
+                    return true
+                }
+                KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                    adjustTextSize(1)
+                    return true
+                }
             }
         }
         return super.onKeyDown(keyCode, event)
     }
     
     override fun dispatchKeyEvent(event: KeyEvent?): Boolean {
+        // Intercetta Tab e Volume PRIMA che Android li usi per navigazione/volume
+        if (event?.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+            when (event.keyCode) {
+                KeyEvent.KEYCODE_TAB -> {
+                    val mapping = findRemoteMapping(KeyEvent.KEYCODE_TAB)
+                    // Se la mappatura è CHANGE_SCROLL_MODE (comportamento errato), usa Play/Pause invece
+                    if (mapping != null && mapping.action != RemoteAction.CHANGE_SCROLL_MODE) {
+                        executeRemoteAction(mapping.action)
+                    } else {
+                        // Default: Play/Pause (anche se c'è una mappatura errata)
+                        togglePlayPause()
+                    }
+                    return true // Consuma l'evento, impedendo la navigazione di default
+                }
+                KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN -> {
+                    val mapping = findRemoteMapping(event.keyCode)
+                    if (mapping != null) {
+                        executeRemoteAction(mapping.action)
+                    } else {
+                        if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
+                            adjustSpeed(1)
+                        } else {
+                            adjustSpeed(-1)
+                        }
+                    }
+                    return true // Consuma l'evento
+                }
+            }
+        }
         return super.dispatchKeyEvent(event)
     }
     
     override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
-        when (keyCode) {
-            KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN -> {
-                stopVolumeKeyRepeat()
-                return true
-            }
-        }
-        return super.onKeyDown(keyCode, event)
+        return super.onKeyUp(keyCode, event)
     }
     
     override fun onNewIntent(intent: Intent) {
@@ -600,67 +743,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
-    private fun handleVolumeKey(keyCode: Int, direction: Int) {
-        val currentTime = System.currentTimeMillis()
-        
-        // Controlla se è un doppio clic
-        if (keyCode == lastVolumeKeyCode && 
-            (currentTime - lastVolumeKeyPressTime) < DOUBLE_CLICK_TIME_DELTA) {
-            // Doppio clic: cerca mappatura personalizzata
-            val mapping = findRemoteMapping(keyCode, true)
-            if (mapping != null) {
-                executeRemoteAction(mapping.action)
-            } else {
-                // Fallback: cambia dimensione testo
-                adjustTextSize(direction)
-            }
-            lastVolumeKeyPressTime = 0 // Reset per evitare triple clic
-            return
-        }
-        
-        // Singolo clic: cerca mappatura personalizzata
-        val mapping = findRemoteMapping(keyCode, false)
-        if (mapping != null) {
-            executeRemoteAction(mapping.action)
-        } else {
-            // Fallback: cambia velocità
-            lastVolumeKeyPressTime = currentTime
-            lastVolumeKeyCode = keyCode
-            startVolumeKeyRepeat(direction)
-        }
-    }
-    
-    private fun handleTabKey() {
-        val currentTime = System.currentTimeMillis()
-        
-        // Controlla se è un doppio clic
-        if ((currentTime - lastTabPressTime) < DOUBLE_CLICK_TIME_DELTA) {
-            // Doppio clic: cerca mappatura personalizzata
-            val mapping = findRemoteMapping(KeyEvent.KEYCODE_TAB, true)
-            if (mapping != null) {
-                executeRemoteAction(mapping.action)
-            } else {
-                // Fallback: cambia modalità di scorrimento
-                scrollMode = (scrollMode + 1) % 3 // Cicla tra 0, 1, 2
-                updateScrollModeButton()
-            }
-            lastTabPressTime = 0 // Reset per evitare triple clic
-            return
-        }
-        
-        // Singolo clic: cerca mappatura personalizzata
-        val mapping = findRemoteMapping(KeyEvent.KEYCODE_TAB, false)
-        if (mapping != null) {
-            executeRemoteAction(mapping.action)
-        } else {
-            // Fallback: play/pause
-            togglePlayPause()
-        }
-        lastTabPressTime = currentTime
-    }
-    
-    private fun findRemoteMapping(keyCode: Int, isDoubleClick: Boolean): RemoteKeyMapping? {
-        return remoteMappings.find { it.keyCode == keyCode && it.isDoubleClick == isDoubleClick }
+    private fun findRemoteMapping(keyCode: Int): RemoteKeyMapping? {
+        return remoteMappings.find { it.keyCode == keyCode }
     }
     
     private fun executeRemoteAction(action: RemoteAction) {
@@ -692,29 +776,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
-    private fun startVolumeKeyRepeat(direction: Int) {
-        volumeKeyDirection = direction
-        isVolumeKeyPressed = true
-        
-        // Prima modifica immediata
-        adjustSpeed(direction)
-        
-        // Poi continua ogni secondo
-        volumeKeyRunnable = object : Runnable {
-            override fun run() {
-                if (isVolumeKeyPressed) {
-                    adjustSpeed(volumeKeyDirection)
-                    volumeKeyHandler?.postDelayed(this, 1000) // Ogni secondo
-                }
-            }
-        }
-        volumeKeyHandler?.postDelayed(volumeKeyRunnable!!, 1000)
-    }
-    
-    private fun stopVolumeKeyRepeat() {
-        isVolumeKeyPressed = false
-        volumeKeyRunnable?.let { volumeKeyHandler?.removeCallbacks(it) }
-    }
     
     private fun adjustSpeed(direction: Int) {
         val newSpeed = (currentSpeed + direction).coerceIn(speedSlider.valueFrom, speedSlider.valueTo)
@@ -916,6 +977,58 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
+    private fun getFileSize(uri: Uri): Long {
+        return try {
+            when (uri.scheme) {
+                "file" -> {
+                    // Per URI file://, ottieni la dimensione direttamente
+                    val path = uri.path
+                    if (path != null) {
+                        val file = java.io.File(path)
+                        if (file.exists()) {
+                            file.length()
+                        } else {
+                            0L
+                        }
+                    } else {
+                        0L
+                    }
+                }
+                "content" -> {
+                    // Per URI content://, usa ContentResolver
+                    try {
+                        val cursor = contentResolver.query(uri, null, null, null, null)
+                        cursor?.use {
+                            if (it.moveToFirst()) {
+                                val sizeIndex = it.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                                if (sizeIndex >= 0) {
+                                    val size = it.getLong(sizeIndex)
+                                    if (size > 0) {
+                                        size
+                                    } else {
+                                        // Se SIZE non è disponibile, restituiamo 0 e procediamo comunque
+                                        0L
+                                    }
+                                } else {
+                                    0L
+                                }
+                            } else {
+                                0L
+                            }
+                        } ?: 0L
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                        0L
+                    }
+                }
+                else -> 0L
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            0L
+        }
+    }
+    
     private fun getFolderPathFromUri(uri: Uri): String {
         return try {
             when (uri.scheme) {
@@ -1070,16 +1183,8 @@ class MainActivity : AppCompatActivity() {
         val actionNames = actions.map { action ->
             val currentMapping = remoteMappings.find { it.action == action }
             val currentKey = if (currentMapping != null) {
-                val keyName = when (currentMapping.keyCode) {
-                    KeyEvent.KEYCODE_DPAD_UP -> getString(R.string.key_dpad_up)
-                    KeyEvent.KEYCODE_DPAD_DOWN -> getString(R.string.key_dpad_down)
-                    KeyEvent.KEYCODE_TAB -> getString(R.string.key_tab)
-                    KeyEvent.KEYCODE_VOLUME_UP -> getString(R.string.key_volume_up)
-                    KeyEvent.KEYCODE_VOLUME_DOWN -> getString(R.string.key_volume_down)
-                    else -> "Key ${currentMapping.keyCode}"
-                }
-                val clickType = if (currentMapping.isDoubleClick) getString(R.string.key_double_click) else getString(R.string.key_single_click)
-                " ($keyName - $clickType)"
+                val keyName = getKeyName(currentMapping.keyCode)
+                " ($keyName)"
             } else {
                 ""
             }
@@ -1116,57 +1221,187 @@ class MainActivity : AppCompatActivity() {
     
     private fun showKeySelectionDialog(action: RemoteAction) {
         // Lista di tasti disponibili
-        val availableKeys = listOf(
-            Pair(KeyEvent.KEYCODE_DPAD_UP, getString(R.string.key_dpad_up)),
-            Pair(KeyEvent.KEYCODE_DPAD_DOWN, getString(R.string.key_dpad_down)),
-            Pair(KeyEvent.KEYCODE_TAB, getString(R.string.key_tab)),
-            Pair(KeyEvent.KEYCODE_VOLUME_UP, getString(R.string.key_volume_up)),
-            Pair(KeyEvent.KEYCODE_VOLUME_DOWN, getString(R.string.key_volume_down))
-        )
+        val availableKeys = mutableListOf<Pair<Int, String>>().apply {
+            // Tasti direzionali e controllo
+            add(Pair(KeyEvent.KEYCODE_DPAD_UP, getString(R.string.key_dpad_up)))
+            add(Pair(KeyEvent.KEYCODE_DPAD_DOWN, getString(R.string.key_dpad_down)))
+            add(Pair(KeyEvent.KEYCODE_DPAD_LEFT, getString(R.string.key_dpad_left)))
+            add(Pair(KeyEvent.KEYCODE_DPAD_RIGHT, getString(R.string.key_dpad_right)))
+            add(Pair(KeyEvent.KEYCODE_TAB, getString(R.string.key_tab)))
+            add(Pair(KeyEvent.KEYCODE_ENTER, getString(R.string.key_enter)))
+            add(Pair(KeyEvent.KEYCODE_SPACE, getString(R.string.key_space)))
+            add(Pair(KeyEvent.KEYCODE_VOLUME_UP, getString(R.string.key_volume_up)))
+            add(Pair(KeyEvent.KEYCODE_VOLUME_DOWN, getString(R.string.key_volume_down)))
+            
+            // Tasti funzione F1-F12
+            add(Pair(KeyEvent.KEYCODE_F1, getString(R.string.key_f1)))
+            add(Pair(KeyEvent.KEYCODE_F2, getString(R.string.key_f2)))
+            add(Pair(KeyEvent.KEYCODE_F3, getString(R.string.key_f3)))
+            add(Pair(KeyEvent.KEYCODE_F4, getString(R.string.key_f4)))
+            add(Pair(KeyEvent.KEYCODE_F5, getString(R.string.key_f5)))
+            add(Pair(KeyEvent.KEYCODE_F6, getString(R.string.key_f6)))
+            add(Pair(KeyEvent.KEYCODE_F7, getString(R.string.key_f7)))
+            add(Pair(KeyEvent.KEYCODE_F8, getString(R.string.key_f8)))
+            add(Pair(KeyEvent.KEYCODE_F9, getString(R.string.key_f9)))
+            add(Pair(KeyEvent.KEYCODE_F10, getString(R.string.key_f10)))
+            add(Pair(KeyEvent.KEYCODE_F11, getString(R.string.key_f11)))
+            add(Pair(KeyEvent.KEYCODE_F12, getString(R.string.key_f12)))
+            
+            // Tasti numerici 0-9
+            add(Pair(KeyEvent.KEYCODE_0, getString(R.string.key_0)))
+            add(Pair(KeyEvent.KEYCODE_1, getString(R.string.key_1)))
+            add(Pair(KeyEvent.KEYCODE_2, getString(R.string.key_2)))
+            add(Pair(KeyEvent.KEYCODE_3, getString(R.string.key_3)))
+            add(Pair(KeyEvent.KEYCODE_4, getString(R.string.key_4)))
+            add(Pair(KeyEvent.KEYCODE_5, getString(R.string.key_5)))
+            add(Pair(KeyEvent.KEYCODE_6, getString(R.string.key_6)))
+            add(Pair(KeyEvent.KEYCODE_7, getString(R.string.key_7)))
+            add(Pair(KeyEvent.KEYCODE_8, getString(R.string.key_8)))
+            add(Pair(KeyEvent.KEYCODE_9, getString(R.string.key_9)))
+            
+            // Lettere A-Z
+            add(Pair(KeyEvent.KEYCODE_A, getString(R.string.key_a)))
+            add(Pair(KeyEvent.KEYCODE_B, getString(R.string.key_b)))
+            add(Pair(KeyEvent.KEYCODE_C, getString(R.string.key_c)))
+            add(Pair(KeyEvent.KEYCODE_D, getString(R.string.key_d)))
+            add(Pair(KeyEvent.KEYCODE_E, getString(R.string.key_e)))
+            add(Pair(KeyEvent.KEYCODE_F, getString(R.string.key_f)))
+            add(Pair(KeyEvent.KEYCODE_G, getString(R.string.key_g)))
+            add(Pair(KeyEvent.KEYCODE_H, getString(R.string.key_h)))
+            add(Pair(KeyEvent.KEYCODE_I, getString(R.string.key_i)))
+            add(Pair(KeyEvent.KEYCODE_J, getString(R.string.key_j)))
+            add(Pair(KeyEvent.KEYCODE_K, getString(R.string.key_k)))
+            add(Pair(KeyEvent.KEYCODE_L, getString(R.string.key_l)))
+            add(Pair(KeyEvent.KEYCODE_M, getString(R.string.key_m)))
+            add(Pair(KeyEvent.KEYCODE_N, getString(R.string.key_n)))
+            add(Pair(KeyEvent.KEYCODE_O, getString(R.string.key_o)))
+            add(Pair(KeyEvent.KEYCODE_P, getString(R.string.key_p)))
+            add(Pair(KeyEvent.KEYCODE_Q, getString(R.string.key_q)))
+            add(Pair(KeyEvent.KEYCODE_R, getString(R.string.key_r)))
+            add(Pair(KeyEvent.KEYCODE_S, getString(R.string.key_s)))
+            add(Pair(KeyEvent.KEYCODE_T, getString(R.string.key_t)))
+            add(Pair(KeyEvent.KEYCODE_U, getString(R.string.key_u)))
+            add(Pair(KeyEvent.KEYCODE_V, getString(R.string.key_v)))
+            add(Pair(KeyEvent.KEYCODE_W, getString(R.string.key_w)))
+            add(Pair(KeyEvent.KEYCODE_X, getString(R.string.key_x)))
+            add(Pair(KeyEvent.KEYCODE_Y, getString(R.string.key_y)))
+            add(Pair(KeyEvent.KEYCODE_Z, getString(R.string.key_z)))
+        }
         
-        val keyNames = availableKeys.map { it.second }.toTypedArray()
+        // Aggiungi l'opzione "Non mappare" come prima voce
+        val keyNames = mutableListOf<String>().apply {
+            add(getString(R.string.unmap)) // Prima voce: "Non mappare"
+            addAll(availableKeys.map { it.second })
+        }.toTypedArray()
         
         MaterialAlertDialogBuilder(this)
             .setTitle(getString(R.string.select_key))
             .setItems(keyNames) { _, which ->
-                val selectedKey = availableKeys[which]
-                
-                // Chiedi se è un doppio click
-                MaterialAlertDialogBuilder(this)
-                    .setTitle(getString(R.string.select_key))
-                    .setMessage(getString(R.string.select_click_type))
-                    .setPositiveButton(getString(R.string.key_single_click)) { _, _ ->
-                        saveKeyMapping(action, selectedKey.first, false)
-                    }
-                    .setNegativeButton(getString(R.string.key_double_click)) { _, _ ->
-                        saveKeyMapping(action, selectedKey.first, true)
-                    }
-                    .setNeutralButton(getString(R.string.cancel), null)
-                    .show()
+                if (which == 0) {
+                    // Selezionato "Non mappare": rimuovi la mappatura per questa azione
+                    removeKeyMapping(action)
+                } else {
+                    // Selezionato un tasto: salva la mappatura
+                    val selectedKey = availableKeys[which - 1] // -1 perché la prima voce è "Non mappare"
+                    saveKeyMapping(action, selectedKey.first)
+                }
             }
             .setNegativeButton(getString(R.string.cancel), null)
             .show()
     }
     
-    private fun saveKeyMapping(action: RemoteAction, keyCode: Int, isDoubleClick: Boolean) {
+    private fun getKeyName(keyCode: Int): String {
+        return when (keyCode) {
+            KeyEvent.KEYCODE_DPAD_UP -> getString(R.string.key_dpad_up)
+            KeyEvent.KEYCODE_DPAD_DOWN -> getString(R.string.key_dpad_down)
+            KeyEvent.KEYCODE_DPAD_LEFT -> getString(R.string.key_dpad_left)
+            KeyEvent.KEYCODE_DPAD_RIGHT -> getString(R.string.key_dpad_right)
+            KeyEvent.KEYCODE_TAB -> getString(R.string.key_tab)
+            KeyEvent.KEYCODE_ENTER -> getString(R.string.key_enter)
+            KeyEvent.KEYCODE_SPACE -> getString(R.string.key_space)
+            KeyEvent.KEYCODE_VOLUME_UP -> getString(R.string.key_volume_up)
+            KeyEvent.KEYCODE_VOLUME_DOWN -> getString(R.string.key_volume_down)
+            KeyEvent.KEYCODE_F1 -> getString(R.string.key_f1)
+            KeyEvent.KEYCODE_F2 -> getString(R.string.key_f2)
+            KeyEvent.KEYCODE_F3 -> getString(R.string.key_f3)
+            KeyEvent.KEYCODE_F4 -> getString(R.string.key_f4)
+            KeyEvent.KEYCODE_F5 -> getString(R.string.key_f5)
+            KeyEvent.KEYCODE_F6 -> getString(R.string.key_f6)
+            KeyEvent.KEYCODE_F7 -> getString(R.string.key_f7)
+            KeyEvent.KEYCODE_F8 -> getString(R.string.key_f8)
+            KeyEvent.KEYCODE_F9 -> getString(R.string.key_f9)
+            KeyEvent.KEYCODE_F10 -> getString(R.string.key_f10)
+            KeyEvent.KEYCODE_F11 -> getString(R.string.key_f11)
+            KeyEvent.KEYCODE_F12 -> getString(R.string.key_f12)
+            KeyEvent.KEYCODE_0 -> getString(R.string.key_0)
+            KeyEvent.KEYCODE_1 -> getString(R.string.key_1)
+            KeyEvent.KEYCODE_2 -> getString(R.string.key_2)
+            KeyEvent.KEYCODE_3 -> getString(R.string.key_3)
+            KeyEvent.KEYCODE_4 -> getString(R.string.key_4)
+            KeyEvent.KEYCODE_5 -> getString(R.string.key_5)
+            KeyEvent.KEYCODE_6 -> getString(R.string.key_6)
+            KeyEvent.KEYCODE_7 -> getString(R.string.key_7)
+            KeyEvent.KEYCODE_8 -> getString(R.string.key_8)
+            KeyEvent.KEYCODE_9 -> getString(R.string.key_9)
+            KeyEvent.KEYCODE_A -> getString(R.string.key_a)
+            KeyEvent.KEYCODE_B -> getString(R.string.key_b)
+            KeyEvent.KEYCODE_C -> getString(R.string.key_c)
+            KeyEvent.KEYCODE_D -> getString(R.string.key_d)
+            KeyEvent.KEYCODE_E -> getString(R.string.key_e)
+            KeyEvent.KEYCODE_F -> getString(R.string.key_f)
+            KeyEvent.KEYCODE_G -> getString(R.string.key_g)
+            KeyEvent.KEYCODE_H -> getString(R.string.key_h)
+            KeyEvent.KEYCODE_I -> getString(R.string.key_i)
+            KeyEvent.KEYCODE_J -> getString(R.string.key_j)
+            KeyEvent.KEYCODE_K -> getString(R.string.key_k)
+            KeyEvent.KEYCODE_L -> getString(R.string.key_l)
+            KeyEvent.KEYCODE_M -> getString(R.string.key_m)
+            KeyEvent.KEYCODE_N -> getString(R.string.key_n)
+            KeyEvent.KEYCODE_O -> getString(R.string.key_o)
+            KeyEvent.KEYCODE_P -> getString(R.string.key_p)
+            KeyEvent.KEYCODE_Q -> getString(R.string.key_q)
+            KeyEvent.KEYCODE_R -> getString(R.string.key_r)
+            KeyEvent.KEYCODE_S -> getString(R.string.key_s)
+            KeyEvent.KEYCODE_T -> getString(R.string.key_t)
+            KeyEvent.KEYCODE_U -> getString(R.string.key_u)
+            KeyEvent.KEYCODE_V -> getString(R.string.key_v)
+            KeyEvent.KEYCODE_W -> getString(R.string.key_w)
+            KeyEvent.KEYCODE_X -> getString(R.string.key_x)
+            KeyEvent.KEYCODE_Y -> getString(R.string.key_y)
+            KeyEvent.KEYCODE_Z -> getString(R.string.key_z)
+            else -> "Key $keyCode"
+        }
+    }
+    
+    private fun saveKeyMapping(action: RemoteAction, keyCode: Int) {
         // Rimuovi mappature esistenti per questa azione
         remoteMappings.removeAll { it.action == action }
         
         // Aggiungi nuova mappatura
-        remoteMappings.add(RemoteKeyMapping(keyCode, isDoubleClick, action))
+        remoteMappings.add(RemoteKeyMapping(keyCode, action))
         saveRemoteMappings()
         
-        val keyName = when (keyCode) {
-            KeyEvent.KEYCODE_DPAD_UP -> getString(R.string.key_dpad_up)
-            KeyEvent.KEYCODE_DPAD_DOWN -> getString(R.string.key_dpad_down)
-            KeyEvent.KEYCODE_TAB -> getString(R.string.key_tab)
-            KeyEvent.KEYCODE_VOLUME_UP -> getString(R.string.key_volume_up)
-            KeyEvent.KEYCODE_VOLUME_DOWN -> getString(R.string.key_volume_down)
-            else -> "Key $keyCode"
-        }
+        val keyName = getKeyName(keyCode)
+        Toast.makeText(this, "$keyName - ${getString(R.string.save)}", Toast.LENGTH_SHORT).show()
+    }
+    
+    private fun removeKeyMapping(action: RemoteAction) {
+        // Rimuovi mappature esistenti per questa azione
+        remoteMappings.removeAll { it.action == action }
+        saveRemoteMappings()
         
-        val clickType = if (isDoubleClick) getString(R.string.key_double_click) else getString(R.string.key_single_click)
-        Toast.makeText(this, "$keyName ($clickType) - ${getString(R.string.save)}", Toast.LENGTH_SHORT).show()
+        // Mostra il nome dell'azione rimossa
+        val actionName = when (action) {
+            RemoteAction.SCROLL_UP -> getString(R.string.action_scroll_up)
+            RemoteAction.SCROLL_DOWN -> getString(R.string.action_scroll_down)
+            RemoteAction.PLAY_PAUSE -> getString(R.string.action_play_pause)
+            RemoteAction.CHANGE_SCROLL_MODE -> getString(R.string.action_change_scroll_mode)
+            RemoteAction.INCREASE_SPEED -> getString(R.string.action_increase_speed)
+            RemoteAction.DECREASE_SPEED -> getString(R.string.action_decrease_speed)
+            RemoteAction.INCREASE_TEXT_SIZE -> getString(R.string.action_increase_text_size)
+            RemoteAction.DECREASE_TEXT_SIZE -> getString(R.string.action_decrease_text_size)
+        }
+        Toast.makeText(this, "$actionName - ${getString(R.string.unmap)}", Toast.LENGTH_SHORT).show()
     }
     
     private fun showRestoreDefaultsDialog() {
@@ -1183,14 +1418,13 @@ class MainActivity : AppCompatActivity() {
     
     private fun restoreDefaultRemoteMappings() {
         remoteMappings = mutableListOf(
-            RemoteKeyMapping(KeyEvent.KEYCODE_DPAD_UP, false, RemoteAction.SCROLL_UP),
-            RemoteKeyMapping(KeyEvent.KEYCODE_DPAD_DOWN, false, RemoteAction.SCROLL_DOWN),
-            RemoteKeyMapping(KeyEvent.KEYCODE_TAB, false, RemoteAction.PLAY_PAUSE),
-            RemoteKeyMapping(KeyEvent.KEYCODE_TAB, true, RemoteAction.CHANGE_SCROLL_MODE),
-            RemoteKeyMapping(KeyEvent.KEYCODE_VOLUME_UP, false, RemoteAction.INCREASE_SPEED),
-            RemoteKeyMapping(KeyEvent.KEYCODE_VOLUME_DOWN, false, RemoteAction.DECREASE_SPEED),
-            RemoteKeyMapping(KeyEvent.KEYCODE_VOLUME_UP, true, RemoteAction.INCREASE_TEXT_SIZE),
-            RemoteKeyMapping(KeyEvent.KEYCODE_VOLUME_DOWN, true, RemoteAction.DECREASE_TEXT_SIZE)
+            RemoteKeyMapping(KeyEvent.KEYCODE_DPAD_UP, RemoteAction.SCROLL_UP),
+            RemoteKeyMapping(KeyEvent.KEYCODE_DPAD_DOWN, RemoteAction.SCROLL_DOWN),
+            RemoteKeyMapping(KeyEvent.KEYCODE_DPAD_LEFT, RemoteAction.DECREASE_TEXT_SIZE),
+            RemoteKeyMapping(KeyEvent.KEYCODE_DPAD_RIGHT, RemoteAction.INCREASE_TEXT_SIZE),
+            RemoteKeyMapping(KeyEvent.KEYCODE_TAB, RemoteAction.PLAY_PAUSE),
+            RemoteKeyMapping(KeyEvent.KEYCODE_VOLUME_UP, RemoteAction.INCREASE_SPEED),
+            RemoteKeyMapping(KeyEvent.KEYCODE_VOLUME_DOWN, RemoteAction.DECREASE_SPEED)
         )
         saveRemoteMappings()
     }
@@ -1198,12 +1432,11 @@ class MainActivity : AppCompatActivity() {
     private fun showRemoteInfoDialog() {
         val remoteControls = """
             • Frecce Su/Giù: Scorrimento manuale
-            • Tab (singolo): Play/Pause
-            • Tab (doppio): Cambia modalità scorrimento
-            • Volume Su (singolo): Aumenta velocità
-            • Volume Giù (singolo): Diminuisce velocità
-            • Volume Su (doppio): Aumenta dimensione testo
-            • Volume Giù (doppio): Diminuisce dimensione testo
+            • Freccia Sinistra: Diminuisce dimensione testo
+            • Freccia Destra: Aumenta dimensione testo
+            • Tab: Play/Pause
+            • Volume Su: Aumenta velocità
+            • Volume Giù: Diminuisce velocità
         """.trimIndent()
         
         MaterialAlertDialogBuilder(this)
@@ -1263,6 +1496,7 @@ class MainActivity : AppCompatActivity() {
             .putFloat("currentTextSize", currentTextSize)
             .putInt("scrollMode", scrollMode)
             .putString("currentFont", currentFont)
+            .putBoolean("isDarkMode", isDarkMode)
             .apply()
     }
     
@@ -1284,7 +1518,7 @@ class MainActivity : AppCompatActivity() {
     
     private fun saveRemoteMappings() {
         val mappingsJson = remoteMappings.joinToString("|") { mapping ->
-            "${mapping.keyCode}:${mapping.isDoubleClick}:${mapping.action.ordinal}"
+            "${mapping.keyCode}:${mapping.action.ordinal}"
         }
         sharedPreferences.edit()
             .putString("remoteMappings", mappingsJson)
@@ -1299,19 +1533,44 @@ class MainActivity : AppCompatActivity() {
         } else {
             remoteMappings = mappingsJson.split("|").mapNotNull { entry ->
                 val parts = entry.split(":")
-                if (parts.size == 3) {
+                if (parts.size == 2) {
                     try {
                         val keyCode = parts[0].toInt()
-                        val isDoubleClick = parts[1].toBoolean()
+                        val actionOrdinal = parts[1].toInt()
+                        if (actionOrdinal in RemoteAction.values().indices) {
+                            RemoteKeyMapping(keyCode, RemoteAction.values()[actionOrdinal])
+                        } else null
+                    } catch (e: Exception) {
+                        null
+                    }
+                } else if (parts.size == 3) {
+                    // Compatibilità con vecchio formato (keyCode:isHold:action)
+                    try {
+                        val keyCode = parts[0].toInt()
                         val actionOrdinal = parts[2].toInt()
                         if (actionOrdinal in RemoteAction.values().indices) {
-                            RemoteKeyMapping(keyCode, isDoubleClick, RemoteAction.values()[actionOrdinal])
+                            RemoteKeyMapping(keyCode, RemoteAction.values()[actionOrdinal])
                         } else null
                     } catch (e: Exception) {
                         null
                     }
                 } else null
             }.toMutableList()
+            
+            // Correggi eventuali mappature errate per Tab
+            // Se Tab è mappato a CHANGE_SCROLL_MODE (comportamento errato), rimuovilo e usa il default
+            val tabMapping = remoteMappings.find { it.keyCode == KeyEvent.KEYCODE_TAB }
+            if (tabMapping != null && tabMapping.action == RemoteAction.CHANGE_SCROLL_MODE) {
+                // Rimuovi la mappatura errata
+                remoteMappings.remove(tabMapping)
+                // Aggiungi la mappatura corretta (PLAY_PAUSE)
+                remoteMappings.add(RemoteKeyMapping(KeyEvent.KEYCODE_TAB, RemoteAction.PLAY_PAUSE))
+                saveRemoteMappings()
+            } else if (tabMapping == null) {
+                // Se Tab non ha mappatura, aggiungi quella di default
+                remoteMappings.add(RemoteKeyMapping(KeyEvent.KEYCODE_TAB, RemoteAction.PLAY_PAUSE))
+                saveRemoteMappings()
+            }
         }
     }
     
@@ -1677,7 +1936,6 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         super.onDestroy()
         stopAutoScroll()
-        stopVolumeKeyRepeat()
         scrollHandler?.removeCallbacksAndMessages(null)
         volumeKeyHandler?.removeCallbacksAndMessages(null)
         toolbarHideHandler?.removeCallbacksAndMessages(null)

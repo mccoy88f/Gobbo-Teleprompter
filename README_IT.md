@@ -5,13 +5,14 @@ Un'applicazione teleprompter professionale per tablet e telefoni Android.
 ## Funzionalità
 
 ### 📄 Caricamento Testo
-- **Inserimento Manuale**: Inserisci testo direttamente tramite dialog
+- **Inserimento Manuale**: Inserisci testo direttamente tramite dialog (massimo 10.000 caratteri)
 - **Importazione File**: Supporto per più formati di file:
   - `.txt` - File di testo semplice
   - `.md` - File Markdown (con supporto formattazione)
   - `.rtf` - File Rich Text Format
   - `.docx` - Documenti Microsoft Word
   - `.pdf` - Documenti PDF
+- **Limite Dimensione File**: Dimensione massima file 50MB (viene mostrato un avviso per file più grandi)
 - **File Recenti**: Accesso rapido ai file aperti di recente con visualizzazione nome e percorso
 - **Cronologia File**: Tracciamento automatico dei file aperti di recente
 
@@ -27,15 +28,25 @@ Un'applicazione teleprompter professionale per tablet e telefoni Android.
 
 ### 🎮 Telecomando
 - **Mappature Personalizzabili**: Assegnazioni completamente personalizzabili dei pulsanti del telecomando
+- **Tasti Supportati**: 
+  - Tasti direzionali (Frecce Su/Giù)
+  - Tasti di controllo (Tab, Invio, Barra Spaziatrice)
+  - Tasti volume (Volume Su/Giù)
+  - Tasti funzione (F1-F12)
+  - Tasti numerici (0-9)
+  - Tasti lettera (A-Z)
+- **Tipi di Azione**:
+  - **Click Singolo**: Esegue l'azione una volta quando il tasto viene premuto
+  - **Tieni Premuto (Hold)**: Esegue l'azione immediatamente, poi la ripete ogni secondo finché il tasto è premuto
 - **Mappature Predefinite**:
   - **Frecce Su/Giù**: Scorrimento manuale
-  - **Tab (Click Singolo)**: Play/Pause
-  - **Tab (Doppio Click)**: Cambia modalità scorrimento
-  - **Volume Su (Click Singolo)**: Aumenta velocità di scorrimento
-  - **Volume Giù (Click Singolo)**: Diminuisce velocità di scorrimento
-  - **Volume Su (Doppio Click)**: Aumenta dimensione testo
-  - **Volume Giù (Doppio Click)**: Diminuisce dimensione testo
-- **Personalizzazione**: Assegna qualsiasi azione a qualsiasi combinazione di pulsanti nelle Impostazioni
+  - **Tab (Click)**: Play/Pause
+  - **Tab (Hold)**: Cambia modalità scorrimento
+  - **Volume Su (Click)**: Aumenta velocità di scorrimento
+  - **Volume Giù (Click)**: Diminuisce velocità di scorrimento
+  - **Volume Su (Hold)**: Aumenta dimensione testo (ripete ogni secondo)
+  - **Volume Giù (Hold)**: Diminuisce dimensione testo (ripete ogni secondo)
+- **Personalizzazione**: Assegna qualsiasi azione a qualsiasi tasto supportato (click singolo o tieni premuto) nelle Impostazioni
 
 ### 🎨 Aspetto
 - **Modalità Scura/Chiara**: Passa tra temi scuri e chiari

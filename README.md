@@ -7,13 +7,14 @@ A professional teleprompter application for Android tablets and mobile phones.
 ## Features
 
 ### 📄 Text Loading
-- **Manual Text Input**: Enter text directly via dialog
+- **Manual Text Input**: Enter text directly via dialog (max 10,000 characters)
 - **File Import**: Support for multiple file formats:
   - `.txt` - Plain text files
   - `.md` - Markdown files (with formatting support)
   - `.rtf` - Rich Text Format files
   - `.docx` - Microsoft Word documents
   - `.pdf` - PDF documents
+- **File Size Limit**: Maximum file size 50MB (warning shown for larger files)
 - **Recent Files**: Quick access to recently opened files with file name and path display
 - **File History**: Automatic tracking of recently opened files
 
@@ -29,15 +30,25 @@ A professional teleprompter application for Android tablets and mobile phones.
 
 ### 🎮 Remote Control
 - **Customizable Key Mappings**: Fully customizable remote control button assignments
+- **Supported Keys**: 
+  - Directional keys (Arrow Up/Down)
+  - Control keys (Tab, Enter, Space)
+  - Volume keys (Volume Up/Down)
+  - Function keys (F1-F12)
+  - Number keys (0-9)
+  - Letter keys (A-Z)
+- **Action Types**:
+  - **Single Click**: Executes action once when key is pressed
+  - **Hold**: Executes action immediately, then repeats every second while key is held down
 - **Default Mappings**:
   - **Arrow Up/Down**: Manual scrolling
-  - **Tab (Single Click)**: Play/Pause
-  - **Tab (Double Click)**: Change scroll mode
-  - **Volume Up (Single Click)**: Increase scroll speed
-  - **Volume Down (Single Click)**: Decrease scroll speed
-  - **Volume Up (Double Click)**: Increase text size
-  - **Volume Down (Double Click)**: Decrease text size
-- **Customization**: Assign any action to any button combination in Settings
+  - **Tab (Click)**: Play/Pause
+  - **Tab (Hold)**: Change scroll mode
+  - **Volume Up (Click)**: Increase scroll speed
+  - **Volume Down (Click)**: Decrease scroll speed
+  - **Volume Up (Hold)**: Increase text size (repeats every second)
+  - **Volume Down (Hold)**: Decrease text size (repeats every second)
+- **Customization**: Assign any action to any supported key (single click or hold) in Settings
 
 ### 🎨 Appearance
 - **Dark/Light Mode**: Toggle between dark and light themes
