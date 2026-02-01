@@ -4,17 +4,13 @@ Un'applicazione teleprompter professionale per tablet e telefoni Android.
 
 ## Funzionalità
 
-### 📄 Caricamento Testo
-- **Inserimento Manuale**: Inserisci testo direttamente tramite dialog (massimo 10.000 caratteri)
-- **Importazione File**: Supporto per più formati di file:
-  - `.txt` - File di testo semplice
-  - `.md` - File Markdown (con supporto formattazione)
-  - `.rtf` - File Rich Text Format
-  - `.docx` - Documenti Microsoft Word
-  - `.pdf` - Documenti PDF
-- **Limite Dimensione File**: Dimensione massima file 50MB (viene mostrato un avviso per file più grandi)
-- **File Recenti**: Accesso rapido ai file aperti di recente con visualizzazione nome e percorso
-- **Cronologia File**: Tracciamento automatico dei file aperti di recente
+### 📄 Documenti e File (v2.0)
+- **Nuovo documento**: Inizia con un documento vuoto
+- **Importa file**: Copia un file dal dispositivo nell'app (i file restano memorizzati nell'app)
+  - Formati supportati: `.txt`, `.md`, `.rtf`, `.docx`, `.pdf`
+  - Limite dimensione: 50MB (avviso per file più grandi)
+- **File importati**: Apri uno dei file già importati (memorizzati nell'app); niente più "file recenti" per URI
+- **Inserimento manuale**: Inserisci testo direttamente tramite dialog (max 10.000 caratteri)
 
 ### 🎬 Controlli di Riproduzione
 - **Scorrimento Automatico**: Scorrimento a velocità variabile (1-20)
@@ -23,8 +19,8 @@ Un'applicazione teleprompter professionale per tablet e telefoni Android.
   - Pagina Intera (meno una riga per il contesto)
   - Metà Pagina
   - 3 Righe
-- **Controllo Velocità**: Regolazione della velocità di scorrimento tramite slider o telecomando
-- **Controllo Dimensione Testo**: Regolazione della dimensione del testo (12-72sp) tramite slider o telecomando
+- **Controllo Velocità**: Regolazione della velocità di scorrimento (60–250 parole/min) tramite slider o telecomando
+- **Controllo Dimensione Testo**: Regolazione della dimensione del testo (12–48sp) tramite slider o telecomando
 
 ### 🎮 Telecomando
 - **Mappature Personalizzabili**: Assegnazioni completamente personalizzabili dei pulsanti del telecomando
@@ -59,8 +55,15 @@ Un'applicazione teleprompter professionale per tablet e telefoni Android.
 - **Modalità Schermo Intero**: Nascondimento automatico della toolbar durante la riproduzione
 - **Tap per Mostrare/Nascondere**: Tocca lo schermo per mostrare/nascondere la toolbar
 
+### 🌐 Controllo Remoto Web (v2.0)
+- **Controllo da browser**: Controlla il teleprompter da qualsiasi dispositivo sulla stessa Wi‑Fi (pagina Material UI)
+- **PIN opzionale**: Proteggi l'accesso con un PIN a 4–8 cifre (configurabile nelle impostazioni)
+- **Azioni**: Play/Pausa, scroll su/giù, imposta parole/min, dimensione testo, apri file importati
+- **Indicatore rete**: Icona globo nella toolbar (verde = attivo, arancione = avvio, rosso = nessuna rete)
+
 ### ⚙️ Impostazioni e Persistenza
 - **Menu Impostazioni**: Accedi a tutte le impostazioni dell'app dalla toolbar
+- **Impostazioni Controllo Web**: Abilita/disabilita server, porta, nome dispositivo, PIN
 - **Impostazioni Telecomando**: Personalizza le mappature dei pulsanti
 - **Impostazioni Font**: Seleziona la famiglia di font preferita
 - **Salvataggio Automatico**: Tutte le impostazioni vengono salvate automaticamente:
@@ -111,15 +114,16 @@ L'APK verrà generato in `app/build/outputs/apk/debug/`
 
 1. Tocca l'icona **File** nella toolbar
 2. Scegli una delle opzioni:
-   - **Apri File**: Seleziona un file dal tuo dispositivo
-   - **Carica Testo**: Inserisci testo manualmente
-   - **File Recenti**: Apri un file usato di recente
+   - **Nuovo documento**: Inizia con testo vuoto
+   - **Importa file**: Seleziona un file dal dispositivo (viene copiato nell'app e aperto)
+   - **File importati**: Apri uno dei file già memorizzati nell'app
+   - **Carica Testo** (manuale): Inserisci testo direttamente tramite dialog
 
 ### Controllo della Riproduzione
 
 - **Pulsante Play**: Avvia lo scorrimento automatico
-- **Slider Velocità**: Regola la velocità di scorrimento (1-20)
-- **Slider Dimensione Testo**: Regola la dimensione del testo (12-72sp)
+- **Slider Velocità**: Regola la velocità di scorrimento (60–250 parole/min)
+- **Slider Dimensione Testo**: Regola la dimensione del testo (12–48sp)
 - **Pulsante Modalità Scorrimento**: Cambia la quantità di scorrimento manuale
 
 ### Telecomando
@@ -135,6 +139,7 @@ Personalizza le mappature dei pulsanti in **Impostazioni → Impostazioni Teleco
 ### Impostazioni
 
 Accedi alle impostazioni tramite l'icona **Impostazioni** nella toolbar:
+- **Impostazioni Controllo Web**: Abilita server, porta, nome dispositivo, PIN opzionale
 - **Impostazioni Telecomando**: Personalizza le mappature dei pulsanti
 - **Impostazioni Font**: Seleziona la famiglia di font
 - **Credits**: Visualizza le informazioni sull'app
@@ -226,9 +231,22 @@ Per richieste di licenza commerciale, contattare l'autore.
 
 I contributi sono benvenuti! Sentiti libero di inviare una Pull Request.
 
+## Changelog
+
+### 2.0.0
+- **Documenti e file**: Nuovo flusso Nuovo documento / Importa file / File importati (i file vengono copiati nell'app)
+- **Controllo web**: PIN opzionale; apri file importati dalla pagina web
+- **UI**: Barra controlli compatta (play + modalità scorrimento su una riga; riga WPM con slider + valore + "Imposta WPM"; dimensione testo su una riga)
+- **Indicatore rete**: Icona globo nella toolbar (verde/arancione/rosso); si aggiorna quando perdi il Wi‑Fi; richiede `ACCESS_NETWORK_STATE`
+- **PDF/errori**: Gestione PDF più sicura (nessun crash per glyph list mancante); messaggio di errore invece di crash
+- **Fix**: Range dimensione testo 12–48 ovunque; WPM non sovrascritto mentre digiti nell'interfaccia web
+
+### 1.x
+- Funzionalità iniziali: caricamento file, telecomando, temi, font, controllo web (senza PIN), file recenti per URI
+
 ## Versione
 
-**Versione Corrente**: 1.0.0
+**Versione Corrente**: 2.0.0
 
 ## Supporto
 

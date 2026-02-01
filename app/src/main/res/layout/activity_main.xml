@@ -35,7 +35,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="16dp"
+        android:padding="8dp"
         android:background="?attr/colorSurface"
         android:elevation="8dp"
         app:layout_constraintBottom_toBottomOf="parent">
@@ -45,103 +45,95 @@
             android:layout_height="wrap_content"
             android:orientation="horizontal"
             android:gravity="center_vertical"
-            android:layout_marginBottom="8dp">
+            android:layout_marginBottom="6dp">
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnPlayPause"
                 style="@style/Widget.Material3.Button"
-                android:layout_width="match_parent"
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginEnd="6dp"
                 android:text="@string/play"
                 android:icon="@android:drawable/ic_media_play" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:layout_marginBottom="8dp">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/scroll_mode"
-                android:textColor="?attr/colorOnSurface"
-                android:textSize="14sp"
-                android:layout_marginBottom="4dp" />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/btnScrollMode"
                 style="@style/Widget.Material3.Button.OutlinedButton"
-                android:layout_width="match_parent"
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
+                android:layout_weight="1"
                 android:text="@string/page_full" />
         </LinearLayout>
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical"
-            android:layout_marginBottom="8dp">
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginBottom="6dp">
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/words_per_min"
                 android:textColor="?attr/colorOnSurface"
-                android:textSize="14sp"
-                android:layout_marginBottom="4dp" />
+                android:textSize="12sp"
+                android:minWidth="48dp" />
 
             <com.google.android.material.slider.Slider
                 android:id="@+id/speedSlider"
-                android:layout_width="match_parent"
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginStart="4dp"
+                android:layout_marginEnd="4dp"
                 android:valueFrom="60"
                 android:valueTo="250"
                 android:value="120" />
 
-            <LinearLayout
-                android:layout_width="match_parent"
+            <TextView
+                android:id="@+id/wpmText"
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center_vertical"
-                android:layout_marginTop="4dp">
+                android:minWidth="36dp"
+                android:textColor="?attr/colorOnSurfaceVariant"
+                android:textSize="12sp" />
 
-                <TextView
-                    android:id="@+id/wpmText"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
-                    android:textColor="?attr/colorOnSurfaceVariant"
-                    android:textSize="13sp" />
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnSetWpm"
-                    style="@style/Widget.Material3.Button.TextButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="@string/set_target_wpm"
-                    android:textAllCaps="false" />
-            </LinearLayout>
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/btnSetWpm"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/set_target_wpm"
+                android:textAllCaps="false"
+                android:minHeight="36dp"
+                android:minWidth="0dp"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp" />
         </LinearLayout>
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical">
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/text_size"
                 android:textColor="?attr/colorOnSurface"
-                android:textSize="14sp"
-                android:layout_marginBottom="4dp" />
+                android:textSize="12sp"
+                android:minWidth="48dp" />
 
             <com.google.android.material.slider.Slider
                 android:id="@+id/textSizeSlider"
-                android:layout_width="match_parent"
+                android:layout_width="0dp"
                 android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:layout_marginStart="4dp"
+                android:layout_marginEnd="4dp"
                 android:valueFrom="12"
                 android:valueTo="48"
                 android:value="24" />

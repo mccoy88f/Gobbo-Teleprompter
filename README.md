@@ -6,17 +6,13 @@ A professional teleprompter application for Android tablets and mobile phones.
 
 ## Features
 
-### 📄 Text Loading
+### 📄 Documents & Files (v2.0)
+- **New Document**: Start with a blank document
+- **Import File**: Copy a file from your device into the app (files are stored inside the app)
+  - Supported formats: `.txt`, `.md`, `.rtf`, `.docx`, `.pdf`
+  - File size limit: 50MB (warning for larger files)
+- **Imported Files**: Open any file previously imported (stored in app); no more "recent files" by URI
 - **Manual Text Input**: Enter text directly via dialog (max 10,000 characters)
-- **File Import**: Support for multiple file formats:
-  - `.txt` - Plain text files
-  - `.md` - Markdown files (with formatting support)
-  - `.rtf` - Rich Text Format files
-  - `.docx` - Microsoft Word documents
-  - `.pdf` - PDF documents
-- **File Size Limit**: Maximum file size 50MB (warning shown for larger files)
-- **Recent Files**: Quick access to recently opened files with file name and path display
-- **File History**: Automatic tracking of recently opened files
 
 ### 🎬 Playback Controls
 - **Automatic Scrolling**: Variable speed scrolling (1-20)
@@ -25,8 +21,8 @@ A professional teleprompter application for Android tablets and mobile phones.
   - Full Page (minus one line for context)
   - Half Page
   - 3 Lines
-- **Speed Control**: Adjustable scroll speed via slider or remote control
-- **Text Size Control**: Adjustable text size (12-72sp) via slider or remote control
+- **Speed Control**: Adjustable scroll speed (60–250 WPM) via slider or remote control
+- **Text Size Control**: Adjustable text size (12–48sp) via slider or remote control
 
 ### 🎮 Remote Control
 - **Customizable Key Mappings**: Fully customizable remote control button assignments
@@ -61,8 +57,15 @@ A professional teleprompter application for Android tablets and mobile phones.
 - **Full Screen Mode**: Automatic toolbar hiding during playback
 - **Tap to Show/Hide**: Tap screen to toggle toolbar visibility
 
+### 🌐 Web Remote Control (v2.0)
+- **Browser Control**: Control the teleprompter from any device on the same Wi‑Fi (Material UI page)
+- **Optional PIN**: Protect access with a 4–8 digit PIN (configurable in settings)
+- **Actions**: Play/Pause, scroll up/down, set WPM, text size, open imported files
+- **Status Indicator**: Toolbar icon (globe) shows server state: green (active), orange (starting), red (no network)
+
 ### ⚙️ Settings & Persistence
 - **Settings Menu**: Access all app settings from the toolbar
+- **Web Remote Settings**: Enable/disable server, port, device name, PIN
 - **Remote Control Settings**: Customize button mappings
 - **Font Settings**: Select preferred font family
 - **Auto-Save**: All settings are automatically saved:
@@ -113,15 +116,16 @@ The APK will be generated in `app/build/outputs/apk/debug/`
 
 1. Tap the **File** icon in the toolbar
 2. Choose one of:
-   - **Open File**: Select a file from your device
-   - **Load Text**: Enter text manually
-   - **Recent Files**: Open a recently used file
+   - **New document**: Start with empty text
+   - **Import file**: Select a file from your device (it is copied into the app and opened)
+   - **Imported files**: Open one of the files already stored in the app
+   - **Load Text** (manual): Enter text directly via dialog
 
 ### Controlling Playback
 
 - **Play Button**: Start automatic scrolling
-- **Speed Slider**: Adjust scroll speed (1-20)
-- **Text Size Slider**: Adjust text size (12-72sp)
+- **Speed Slider**: Adjust scroll speed (60–250 WPM)
+- **Text Size Slider**: Adjust text size (12–48sp)
 - **Scroll Mode Button**: Change manual scroll amount
 
 ### Remote Control
@@ -137,6 +141,7 @@ Customize button mappings in **Settings → Remote Control Settings → Customiz
 ### Settings
 
 Access settings via the **Settings** icon in the toolbar:
+- **Web Remote Settings**: Enable server, set port, device name, optional PIN
 - **Remote Control Settings**: Customize button mappings
 - **Font Settings**: Select font family
 - **Credits**: View app information
@@ -228,9 +233,22 @@ For commercial licensing inquiries, please contact the author.
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
+## Changelog
+
+### 2.0.0
+- **Documents & files**: New flow: New document / Import file / Imported files (files are copied into the app)
+- **Web remote**: Optional PIN protection; open imported files from the web page
+- **UI**: Compact control bar (play + scroll mode on one row; WPM row with slider + value + "Set WPM"; text size on one row)
+- **Network indicator**: Globe icon in toolbar (green/orange/red); updates when Wi‑Fi is lost; requires `ACCESS_NETWORK_STATE`
+- **PDF/errors**: Safer PDF handling (no crash on missing glyph list); show error message instead of crashing
+- **Fixes**: Slider text size range 12–48 everywhere; WPM not overwritten while typing in web UI
+
+### 1.x
+- Initial features: file loading, remote control, themes, font settings, web remote (no PIN), recent files by URI
+
 ## Version
 
-**Current Version**: 1.0.0
+**Current Version**: 2.0.0
 
 ## Support
 

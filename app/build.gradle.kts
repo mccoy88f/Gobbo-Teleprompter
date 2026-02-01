@@ -23,8 +23,8 @@ android {
         applicationId = "com.mccoy88f.gobbo"
         minSdk = 26
         targetSdk = 34
-        versionCode = 5
-        versionName = "1.4.0"
+        versionCode = 6
+        versionName = "2.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -82,6 +82,9 @@ dependencies {
     
     // Per leggere file PDF
     implementation("com.tom-roush:pdfbox-android:2.0.27.0")
+    
+    // Server HTTP snello per controllo remoto web
+    implementation("org.nanohttpd:nanohttpd:2.3.1")
     
     testImplementation("junit:junit:4.13.2")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")

@@ -15,12 +15,12 @@ object FileUtils {
             context.contentResolver.openInputStream(uri)?.use { inputStream ->
                 when (extension.lowercase()) {
                     "docx" -> readDocx(inputStream)
-                    "pdf" -> readPdf(inputStream)
+                    "pdf" -> try { readPdf(inputStream) } catch (e: Throwable) { e.printStackTrace(); null }
                     "rtf" -> readRtf(inputStream)
                     else -> readPlainText(inputStream)
                 }
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             e.printStackTrace()
             null
         }
@@ -50,12 +50,15 @@ object FileUtils {
         return content.toString()
     }
     
-    private fun readPdf(inputStream: java.io.InputStream): String {
-        val document = PDDocument.load(inputStream)
-        val stripper = PDFTextStripper()
-        val text = stripper.getText(document)
-        document.close()
-        return text
+    private fun readPdf(inputStream: java.io.InputStream): String? {
+        var document: PDDocument? = null
+        return try {
+            document = PDDocument.load(inputStream)
+            val stripper = PDFTextStripper()
+            stripper.getText(document)
+        } finally {
+            try { document?.close() } catch (_: Exception) { }
+        }
     }
     
     private fun readRtf(inputStream: java.io.InputStream): String {

@@ -24,6 +24,13 @@
         app:iconTint="?attr/colorOnSurface" />
     
     <item
+        android:id="@+id/menu_web_server_indicator"
+        android:icon="@drawable/ic_web_server"
+        android:title="@string/web_remote_active"
+        app:showAsAction="always"
+        android:visible="false" />
+    
+    <item
         android:id="@+id/menu_settings"
         android:icon="@drawable/ic_settings"
         android:title="@string/settings"

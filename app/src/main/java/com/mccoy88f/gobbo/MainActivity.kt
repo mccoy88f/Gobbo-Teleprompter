@@ -32,6 +32,9 @@ import android.provider.OpenableColumns
 import android.database.Cursor
 import android.content.pm.PackageInstaller
 import android.net.ConnectivityManager
+import android.net.Network
+import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.os.Environment
 import android.app.DownloadManager
 import android.content.BroadcastReceiver
@@ -40,8 +43,15 @@ import android.content.IntentFilter
 import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.Inet4Address
+import java.net.NetworkInterface
+import java.security.MessageDigest
+import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.atomic.AtomicReference
+import java.io.File
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : AppCompatActivity(), WebRemoteController {
     
     private lateinit var scrollView: NestedScrollView
     private lateinit var textView: android.widget.TextView
@@ -69,6 +79,7 @@ class MainActivity : AppCompatActivity() {
     private var progressDialog: androidx.appcompat.app.AlertDialog? = null
     private lateinit var sharedPreferences: SharedPreferences
     private var currentFileUri: String? = null
+    private var currentImportedFileId: String? = null
     private var downloadId: Long = -1
     private var downloadReceiver: BroadcastReceiver? = null
     
@@ -86,6 +97,16 @@ class MainActivity : AppCompatActivity() {
     
     private var remoteMappings = mutableListOf<RemoteKeyMapping>()
     private var currentFont = "default" // default, serif, sans_serif, monospace
+    
+    private var webServer: WebServer? = null
+    private var webRemoteEnabled = false
+    private var webRemotePort = 8080
+    private var webRemoteDeviceName = ""
+    private var webRemotePinHash = "" // SHA-256 hex; vuoto = nessun PIN
+    
+    private enum class WebServerIndicatorState { STARTING, ACTIVE, NO_NETWORK }
+    private var webServerIndicatorState = WebServerIndicatorState.ACTIVE
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
     
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -182,9 +203,11 @@ class MainActivity : AppCompatActivity() {
     
     override fun onResume() {
         super.onResume()
+        if (webRemoteEnabled) {
+            startWebServerWithIndicator()
+            registerNetworkCallback()
+        }
         // Assicurati che la toolbar sia sempre visibile quando l'Activity riprende
-        // Questo è importante dopo le ricreazioni (es. cambio tema)
-        // A meno che non sia in modalità di riproduzione
         if (!isPlaying) {
             showToolbar()
         }
@@ -192,12 +215,52 @@ class MainActivity : AppCompatActivity() {
             if (!isPlaying) {
                 showToolbar()
             }
-        }, 100) // Delay per assicurarsi che tutto sia inizializzato
+        }, 100)
         Handler(Looper.getMainLooper()).postDelayed({
             if (!isPlaying) {
                 showToolbar()
             }
-        }, 300) // Delay più lungo per eventuali ricreazioni successive
+        }, 300)
+    }
+    
+    override fun onPause() {
+        super.onPause()
+        unregisterNetworkCallback()
+        stopWebServer()
+    }
+    
+    private fun updateWebServerIndicatorFromNetwork() {
+        if (!webRemoteEnabled || webServerIndicatorState == WebServerIndicatorState.STARTING) return
+        val hasIp = getLocalIpAddress() != null
+        val newState = if (hasIp) WebServerIndicatorState.ACTIVE else WebServerIndicatorState.NO_NETWORK
+        if (webServerIndicatorState != newState) {
+            webServerIndicatorState = newState
+            invalidateOptionsMenu()
+        }
+    }
+    
+    private fun registerNetworkCallback() {
+        if (networkCallback != null) return
+        val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager ?: return
+        networkCallback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) = runOnUiThread { updateWebServerIndicatorFromNetwork() }
+            override fun onLost(network: Network) = runOnUiThread { updateWebServerIndicatorFromNetwork() }
+            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) = runOnUiThread { updateWebServerIndicatorFromNetwork() }
+        }
+        try {
+            cm.registerDefaultNetworkCallback(networkCallback!!)
+        } catch (e: SecurityException) {
+            networkCallback = null
+        }
+    }
+    
+    private fun unregisterNetworkCallback() {
+        networkCallback?.let { callback ->
+            try {
+                (getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager)?.unregisterNetworkCallback(callback)
+            } catch (_: Exception) { }
+            networkCallback = null
+        }
     }
     
     override fun onSaveInstanceState(outState: Bundle) {
@@ -209,6 +272,24 @@ class MainActivity : AppCompatActivity() {
     
     override fun onCreateOptionsMenu(menu: android.view.Menu?): Boolean {
         menuInflater.inflate(R.menu.main_menu, menu)
+        return true
+    }
+    
+    override fun onPrepareOptionsMenu(menu: android.view.Menu?): Boolean {
+        super.onPrepareOptionsMenu(menu)
+        val item = menu?.findItem(R.id.menu_web_server_indicator) ?: return true
+        item.isVisible = webRemoteEnabled
+        if (webRemoteEnabled) {
+            if (webServerIndicatorState == WebServerIndicatorState.ACTIVE && getLocalIpAddress() == null) {
+                webServerIndicatorState = WebServerIndicatorState.NO_NETWORK
+            }
+            val iconRes = when (webServerIndicatorState) {
+                WebServerIndicatorState.STARTING -> R.drawable.ic_web_server_orange
+                WebServerIndicatorState.ACTIVE -> R.drawable.ic_web_server
+                WebServerIndicatorState.NO_NETWORK -> R.drawable.ic_web_server_red
+            }
+            item.setIcon(iconRes)
+        }
         return true
     }
     
@@ -228,6 +309,23 @@ class MainActivity : AppCompatActivity() {
             }
             R.id.menu_settings -> {
                 showSettingsMenu()
+                true
+            }
+            R.id.menu_web_server_indicator -> {
+                when (webServerIndicatorState) {
+                    WebServerIndicatorState.STARTING -> Toast.makeText(this, getString(R.string.web_remote_starting), Toast.LENGTH_SHORT).show()
+                    WebServerIndicatorState.ACTIVE -> {
+                        val ip = getLocalIpAddress()
+                        if (ip != null) {
+                            Toast.makeText(this, "http://$ip:$webRemotePort", Toast.LENGTH_LONG).show()
+                        } else {
+                            webServerIndicatorState = WebServerIndicatorState.NO_NETWORK
+                            invalidateOptionsMenu()
+                            Toast.makeText(this, getString(R.string.web_remote_no_ip), Toast.LENGTH_LONG).show()
+                        }
+                    }
+                    WebServerIndicatorState.NO_NETWORK -> Toast.makeText(this, getString(R.string.web_remote_no_ip), Toast.LENGTH_LONG).show()
+                }
                 true
             }
             else -> super.onOptionsItemSelected(item)
@@ -436,42 +534,39 @@ class MainActivity : AppCompatActivity() {
                 runOnUiThread {
                     progressDialog?.dismiss()
                     
-                    if (!text.isNullOrEmpty()) {
-                        savedText = text // Salva il testo caricato
-                        savedTextExtension = extension // Salva l'estensione per il ripristino
-                        currentFileUri = uri.toString() // Salva l'URI del file corrente
-                        
-                        // Salva il file corrente e aggiungi alla cronologia
-                        saveCurrentFile(uri.toString(), extension)
-                        addToFileHistory(uri.toString(), extension)
-                        
-                        // Salva anche il testo per il ripristino
-                        savedText = text
-                        savedTextExtension = extension
-                        sharedPreferences.edit()
-                            .putString("savedText", text)
-                            .putString("savedTextExtension", extension)
-                            .apply()
-                        
-                        // Se è un file Markdown, formatta con il parser Markdown
-                        if (extension.lowercase() == "md") {
-                            textView.text = MarkdownFormatter.formatMarkdownSimple(text)
-                        } else {
-                            textView.text = text
+                    when {
+                        text == null -> Toast.makeText(this@MainActivity, getString(R.string.error_loading_file), Toast.LENGTH_LONG).show()
+                        text.isEmpty() -> Toast.makeText(this@MainActivity, getString(R.string.no_text_loaded), Toast.LENGTH_SHORT).show()
+                        else -> {
+                            val displayName = getFileNameFromUri(uri)
+                            val id = saveImportedFile(text, displayName, extension)
+                            currentImportedFileId = id
+                            currentFileUri = null
+                            savedText = text
+                            savedTextExtension = extension
+                            sharedPreferences.edit()
+                                .putString("savedText", text)
+                                .putString("savedTextExtension", extension)
+                                .putString("currentImportedFileId", id)
+                                .remove("currentFileUri")
+                                .remove("currentFileExtension")
+                                .apply()
+                            if (extension.lowercase() == "md") {
+                                textView.text = MarkdownFormatter.formatMarkdownSimple(text)
+                            } else {
+                                textView.text = text
+                            }
+                            scrollView.scrollTo(0, 0)
+                            scrollView.post { updateWpmDisplay() }
+                            Toast.makeText(this@MainActivity, getString(R.string.file_imported), Toast.LENGTH_SHORT).show()
                         }
-                        
-                        scrollView.scrollTo(0, 0)
-                        scrollView.post { updateWpmDisplay() }
-                        Toast.makeText(this@MainActivity, getString(R.string.file_imported), Toast.LENGTH_SHORT).show()
-                    } else {
-                        Toast.makeText(this@MainActivity, getString(R.string.no_text_loaded), Toast.LENGTH_SHORT).show()
                     }
                 }
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 e.printStackTrace()
                 runOnUiThread {
                     progressDialog?.dismiss()
-                    Toast.makeText(this@MainActivity, getString(R.string.error_loading_file), Toast.LENGTH_SHORT).show()
+                    Toast.makeText(this@MainActivity, getString(R.string.error_loading_file), Toast.LENGTH_LONG).show()
                 }
             }
         }.start()
@@ -880,125 +975,83 @@ class MainActivity : AppCompatActivity() {
     
     private fun showFileMenu() {
         val options = arrayOf(
-            getString(R.string.open_file),
-            getString(R.string.load_text_manual),
-            getString(R.string.recent_files)
+            getString(R.string.new_document),
+            getString(R.string.import_file),
+            getString(R.string.imported_files)
         )
-        
         MaterialAlertDialogBuilder(this)
             .setTitle(getString(R.string.file_menu))
             .setItems(options) { _, which ->
                 when (which) {
-                    0 -> checkPermissionAndOpenFilePicker()
-                    1 -> showTextInputDialog()
-                    2 -> showRecentFilesDialog()
+                    0 -> showNewDocument()
+                    1 -> checkPermissionAndOpenFilePicker()
+                    2 -> showImportedFilesDialog()
                 }
             }
             .show()
     }
     
-    private fun showRecentFilesDialog() {
-        val fileHistory = getFileHistory()
-        
-        if (fileHistory.isEmpty()) {
+    private fun showNewDocument() {
+        currentImportedFileId = null
+        currentFileUri = null
+        savedText = ""
+        savedTextExtension = ""
+        sharedPreferences.edit()
+            .putString("savedText", "")
+            .putString("savedTextExtension", "")
+            .remove("currentImportedFileId")
+            .remove("currentFileUri")
+            .remove("currentFileExtension")
+            .apply()
+        textView.text = getString(R.string.enter_text)
+        scrollView.post { updateWpmDisplay() }
+        Toast.makeText(this, getString(R.string.new_document), Toast.LENGTH_SHORT).show()
+    }
+    
+    private fun showImportedFilesDialog() {
+        val list = getImportedFileList()
+        if (list.isEmpty()) {
             MaterialAlertDialogBuilder(this)
-                .setTitle(getString(R.string.recent_files))
-                .setMessage(getString(R.string.no_recent_files))
+                .setTitle(getString(R.string.imported_files))
+                .setMessage(getString(R.string.no_imported_files))
                 .setPositiveButton(getString(R.string.ok), null)
                 .show()
             return
         }
-        
-        // Filtra i file validi e rimuovi quelli non più accessibili
-        val validHistory = fileHistory.filter { entry ->
-            try {
-                val uri = Uri.parse(entry.first)
-                isUriValid(uri)
-            } catch (e: Exception) {
-                false
-            }
-        }
-        
-        // Se ci sono file non validi, aggiorna la cronologia
-        if (validHistory.size < fileHistory.size) {
-            saveFileHistory(validHistory)
-        }
-        
-        // Se dopo il filtraggio non ci sono più file, mostra messaggio
-        if (validHistory.isEmpty()) {
-            MaterialAlertDialogBuilder(this)
-                .setTitle(getString(R.string.recent_files))
-                .setMessage(getString(R.string.no_recent_files))
-                .setPositiveButton(getString(R.string.ok), null)
-                .show()
-            return
-        }
-        
-        // Crea una lista personalizzata per mostrare nome e percorso
-        val items = validHistory.map { entry ->
-            val uri = Uri.parse(entry.first)
-            val fileName = getFileNameFromUri(uri)
-            // Ottieni il percorso della cartella
-            val folderPath = getFolderPathFromUri(uri)
-            Pair(fileName, folderPath)
-        }
-        
-        // Crea un adapter personalizzato per mostrare nome e percorso su righe separate
-        val adapter = object : android.widget.ArrayAdapter<Pair<String, String>>(
-            this,
-            android.R.layout.simple_list_item_2,
-            android.R.id.text1,
-            items
-        ) {
-            override fun getView(position: Int, convertView: android.view.View?, parent: android.view.ViewGroup): android.view.View {
-                val view = super.getView(position, convertView, parent)
-                val item = items[position]
-                
-                val text1 = view.findViewById<android.widget.TextView>(android.R.id.text1)
-                val text2 = view.findViewById<android.widget.TextView>(android.R.id.text2)
-                
-                text1.text = item.first
-                // Mostra il percorso della cartella solo se disponibile
-                if (item.second.isNotEmpty()) {
-                    text2.text = item.second
-                    text2.textSize = 12f
-                    text2.setTextColor(androidx.core.content.ContextCompat.getColor(this@MainActivity, android.R.color.darker_gray))
-                    text2.visibility = android.view.View.VISIBLE
-                } else {
-                    text2.visibility = android.view.View.GONE
-                }
-                
-                return view
-            }
-        }
-        
+        val names = list.map { it.second }
         MaterialAlertDialogBuilder(this)
-            .setTitle(getString(R.string.recent_files))
-            .setAdapter(adapter) { _, which ->
-                try {
-                    val uriString = validHistory[which].first
-                    val selectedUri = Uri.parse(uriString)
-                    
-                    // Verifica che l'URI sia ancora valido prima di caricarlo
-                    if (isUriValid(selectedUri)) {
-                        loadFileContent(selectedUri)
-                    } else {
-                        // Rimuovi il file dalla cronologia se non è più accessibile
-                        removeFromFileHistory(uriString)
-                        Toast.makeText(this, getString(R.string.error_loading_file), Toast.LENGTH_SHORT).show()
-                        // Ricarica la lista dei file recenti
-                        showRecentFilesDialog()
-                    }
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                    Toast.makeText(this, getString(R.string.error_loading_file), Toast.LENGTH_SHORT).show()
-                }
+            .setTitle(getString(R.string.imported_files))
+            .setItems(names.toTypedArray()) { _, which ->
+                val (id, _, ext) = list[which]
+                openImportedFile(id, ext)
             }
             .setNegativeButton(getString(R.string.cancel), null)
-            .setNeutralButton(getString(R.string.clear_recent_files)) { _, _ ->
-                showClearRecentFilesDialog()
-            }
             .show()
+    }
+    
+    private fun openImportedFile(id: String, extension: String) {
+        val content = loadImportedFileContent(id) ?: run {
+            Toast.makeText(this, getString(R.string.error_loading_file), Toast.LENGTH_SHORT).show()
+            return
+        }
+        currentImportedFileId = id
+        currentFileUri = null
+        savedText = content
+        savedTextExtension = extension
+        sharedPreferences.edit()
+            .putString("savedText", content)
+            .putString("savedTextExtension", extension)
+            .putString("currentImportedFileId", id)
+            .remove("currentFileUri")
+            .remove("currentFileExtension")
+            .apply()
+        if (extension.lowercase() == "md") {
+            textView.text = MarkdownFormatter.formatMarkdownSimple(content)
+        } else {
+            textView.text = content
+        }
+        scrollView.scrollTo(0, 0)
+        scrollView.post { updateWpmDisplay() }
     }
     
     private fun getFileNameFromUri(uri: Uri): String {
@@ -1205,45 +1258,11 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
-    private fun removeFromFileHistory(uriString: String) {
-        val fileHistory = getFileHistory()
-        val updatedHistory = fileHistory.filter { it.first != uriString }
-        // Salva la cronologia aggiornata
-        val historyJson = updatedHistory.joinToString("|") { "${it.first}::${it.second}" }
-        sharedPreferences.edit()
-            .putString("fileHistory", historyJson)
-            .apply()
-    }
-    
-    private fun saveFileHistory(history: List<Pair<String, String>>) {
-        val historyJson = history.joinToString("|") { "${it.first}::${it.second}" }
-        sharedPreferences.edit()
-            .putString("fileHistory", historyJson)
-            .apply()
-    }
-    
-    private fun showClearRecentFilesDialog() {
-        MaterialAlertDialogBuilder(this)
-            .setTitle(getString(R.string.clear_recent_files))
-            .setMessage(getString(R.string.clear_recent_confirm))
-            .setPositiveButton(getString(R.string.ok)) { _, _ ->
-                clearFileHistory()
-                Toast.makeText(this, getString(R.string.save), Toast.LENGTH_SHORT).show()
-            }
-            .setNegativeButton(getString(R.string.cancel), null)
-            .show()
-    }
-    
-    private fun clearFileHistory() {
-        sharedPreferences.edit()
-            .putString("fileHistory", "")
-            .apply()
-    }
-    
     private fun showSettingsMenu() {
         val options = arrayOf(
             getString(R.string.remote_settings),
             getString(R.string.font_settings),
+            getString(R.string.web_remote_settings),
             getString(R.string.credits)
         )
         
@@ -1253,15 +1272,188 @@ class MainActivity : AppCompatActivity() {
                 when (which) {
                     0 -> showRemoteSettingsDialog()
                     1 -> showFontSettingsDialog()
-                    2 -> showCreditsDialog()
+                    2 -> showWebRemoteSettingsDialog()
+                    3 -> showCreditsDialog()
                 }
             }
             .show()
     }
     
     private fun showRemoteSettingsDialog() {
-        // Apri direttamente la personalizzazione
         showCustomizeRemoteDialog()
+    }
+    
+    private fun showWebRemoteSettingsDialog() {
+        val dialogView = layoutInflater.inflate(R.layout.dialog_web_remote, null)
+        val switchWebRemote = dialogView.findViewById<com.google.android.material.materialswitch.MaterialSwitch>(R.id.switchWebRemote)
+        val textWebRemoteUrl = dialogView.findViewById<android.widget.TextView>(R.id.textWebRemoteUrl)
+        val editDeviceName = dialogView.findViewById<TextInputEditText>(R.id.editDeviceName)
+        val editPort = dialogView.findViewById<TextInputEditText>(R.id.editPort)
+        val editPin = dialogView.findViewById<TextInputEditText>(R.id.editPin)
+        
+        switchWebRemote.isChecked = webRemoteEnabled
+        editDeviceName.setText(webRemoteDeviceName)
+        editPort.setText(webRemotePort.toString())
+        editPin.setText("")
+        dialogView.findViewById<TextInputLayout>(R.id.textInputLayoutPin)?.hint = if (webRemotePinHash.isEmpty()) getString(R.string.web_remote_pin_hint) else getString(R.string.web_remote_pin_set)
+        
+        fun updateUrlVisibility() {
+            val enabled = switchWebRemote.isChecked
+            textWebRemoteUrl.visibility = if (enabled) android.view.View.VISIBLE else android.view.View.GONE
+            if (enabled) {
+                val ip = getLocalIpAddress()
+                val port = editPort.text?.toString()?.toIntOrNull()?.coerceIn(1024, 65535) ?: webRemotePort
+                textWebRemoteUrl.text = getString(R.string.web_remote_url) + "\nhttp://${ip ?: "…"}:$port"
+            }
+        }
+        switchWebRemote.setOnCheckedChangeListener { _, _ -> updateUrlVisibility() }
+        updateUrlVisibility()
+        
+        MaterialAlertDialogBuilder(this)
+            .setTitle(getString(R.string.web_remote_settings))
+            .setView(dialogView)
+            .setPositiveButton(getString(R.string.ok)) { _, _ ->
+                webRemoteEnabled = switchWebRemote.isChecked
+                webRemoteDeviceName = editDeviceName.text?.toString()?.trim().orEmpty()
+                webRemotePort = editPort.text?.toString()?.toIntOrNull()?.coerceIn(1024, 65535) ?: 8080
+                val pinInput = editPin.text?.toString()?.trim().orEmpty()
+                webRemotePinHash = when {
+                    pinInput.isEmpty() -> webRemotePinHash // mantieni il PIN precedente
+                    pinInput.length in 4..8 -> hashPin(pinInput)
+                    else -> "" // valore non valido = rimuovi PIN
+                }
+                saveSettings()
+                if (webRemoteEnabled) {
+                    startWebServerWithIndicator()
+                    Handler(Looper.getMainLooper()).postDelayed({
+                        when (webServerIndicatorState) {
+                            WebServerIndicatorState.ACTIVE -> {
+                                val ip = getLocalIpAddress()
+                                if (ip != null) Toast.makeText(this, "http://$ip:$webRemotePort", Toast.LENGTH_LONG).show()
+                                else Toast.makeText(this, getString(R.string.web_remote_no_ip), Toast.LENGTH_SHORT).show()
+                            }
+                            WebServerIndicatorState.NO_NETWORK -> Toast.makeText(this, getString(R.string.web_remote_no_ip), Toast.LENGTH_SHORT).show()
+                            else -> { }
+                        }
+                    }, 500)
+                } else {
+                    stopWebServer()
+                }
+                invalidateOptionsMenu()
+            }
+            .setNegativeButton(getString(R.string.cancel), null)
+            .show()
+    }
+    
+    private fun hashPin(pin: String): String {
+        return try {
+            val md = MessageDigest.getInstance("SHA-256")
+            val digest = md.digest(pin.toByteArray(Charsets.UTF_8))
+            digest.joinToString("") { "%02x".format(it) }
+        } catch (_: Exception) {
+            ""
+        }
+    }
+    
+    private fun getLocalIpAddress(): String? {
+        return try {
+            val interfaces = NetworkInterface.getNetworkInterfaces()
+            while (interfaces.hasMoreElements()) {
+                val iface = interfaces.nextElement()
+                if (iface.isLoopback || !iface.isUp) continue
+                val addresses = iface.inetAddresses
+                while (addresses.hasMoreElements()) {
+                    val addr = addresses.nextElement()
+                    if (!addr.isLoopbackAddress && addr is Inet4Address)
+                        return addr.hostAddress
+                }
+            }
+            null
+        } catch (_: Exception) {
+            null
+        }
+    }
+    
+    /** Avvia il web server e aggiorna l'indicatore: arancione (avvio), poi verde (ok) o rosso (nessuna rete). */
+    private fun startWebServerWithIndicator() {
+        webServerIndicatorState = WebServerIndicatorState.STARTING
+        invalidateOptionsMenu()
+        stopWebServer()
+        try {
+            webServer = WebServer(webRemotePort, this, webRemoteDeviceName, webRemotePinHash)
+            webServer?.start()
+        } catch (e: Exception) {
+            e.printStackTrace()
+            webServerIndicatorState = WebServerIndicatorState.NO_NETWORK
+            Toast.makeText(this, "Porta $webRemotePort non disponibile", Toast.LENGTH_SHORT).show()
+            invalidateOptionsMenu()
+            return
+        }
+        Handler(Looper.getMainLooper()).postDelayed({
+            webServerIndicatorState = if (getLocalIpAddress() != null) WebServerIndicatorState.ACTIVE else WebServerIndicatorState.NO_NETWORK
+            invalidateOptionsMenu()
+        }, 400)
+    }
+    
+    private fun startWebServer() {
+        stopWebServer()
+        try {
+            webServer = WebServer(webRemotePort, this, webRemoteDeviceName, webRemotePinHash)
+            webServer?.start()
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Toast.makeText(this, "Porta $webRemotePort non disponibile", Toast.LENGTH_SHORT).show()
+        }
+    }
+    
+    private fun stopWebServer() {
+        try {
+            webServer?.stop()
+        } catch (_: Exception) { }
+        webServer = null
+    }
+    
+    override fun onPlayPause() = runOnUiThread { togglePlayPause() }
+    override fun onScrollUp() = runOnUiThread { scrollByMode(-1) }
+    override fun onScrollDown() = runOnUiThread { scrollByMode(1) }
+    override fun onSetWpm(wpm: Int) = runOnUiThread {
+        targetWpm = wpm.coerceIn(60, 250)
+        if (::speedSlider.isInitialized) speedSlider.value = targetWpm.toFloat()
+        saveSettings()
+        updateWpmDisplay()
+        if (isPlaying) { stopAutoScroll(); startAutoScroll() }
+    }
+    override fun onSetTextSize(size: Float) = runOnUiThread {
+        val s = size.coerceIn(12f, 48f)
+        currentTextSize = s
+        if (::textView.isInitialized) textView.textSize = s
+        if (::textSizeSlider.isInitialized) textSizeSlider.value = s
+        saveSettings()
+    }
+    override fun onChangeScrollMode(mode: Int) = runOnUiThread {
+        scrollMode = mode.coerceIn(0, 2)
+        updateScrollModeButton()
+    }
+    override fun getState(): WebRemoteState = WebRemoteState(
+        playing = isPlaying,
+        wpm = targetWpm,
+        textSize = currentTextSize,
+        hasText = countWords() > 0,
+        scrollMode = scrollMode
+    )
+    
+    override fun getRecentFiles(): List<Pair<Int, String>> {
+        val list = getImportedFileList()
+        if (list.isEmpty()) return emptyList()
+        return list.mapIndexed { index, triple -> Pair(index, triple.second) }
+    }
+    
+    override fun loadRecentFile(index: Int) = runOnUiThread {
+        val list = getImportedFileList()
+        if (index in list.indices) {
+            val (id, _, ext) = list[index]
+            openImportedFile(id, ext)
+        }
     }
     
     private fun showCustomizeRemoteDialog() {
@@ -1583,6 +1775,10 @@ class MainActivity : AppCompatActivity() {
             .putInt("scrollMode", scrollMode)
             .putString("currentFont", currentFont)
             .putBoolean("isDarkMode", isDarkMode)
+            .putBoolean("webRemoteEnabled", webRemoteEnabled)
+            .putInt("webRemotePort", webRemotePort)
+            .putString("webRemoteDeviceName", webRemoteDeviceName)
+            .putString("webRemotePinHash", webRemotePinHash)
             .apply()
     }
     
@@ -1596,9 +1792,14 @@ class MainActivity : AppCompatActivity() {
         } else {
             120
         }
-        currentTextSize = sharedPreferences.getFloat("currentTextSize", 24f)
+        currentTextSize = sharedPreferences.getFloat("currentTextSize", 24f).coerceIn(12f, 48f)
         scrollMode = sharedPreferences.getInt("scrollMode", 0)
         currentFont = sharedPreferences.getString("currentFont", "default") ?: "default"
+        webRemoteEnabled = sharedPreferences.getBoolean("webRemoteEnabled", false)
+        webRemotePort = sharedPreferences.getInt("webRemotePort", 8080).coerceIn(1024, 65535)
+        webRemoteDeviceName = sharedPreferences.getString("webRemoteDeviceName", "") ?: ""
+        webRemotePinHash = sharedPreferences.getString("webRemotePinHash", "") ?: ""
+        currentImportedFileId = sharedPreferences.getString("currentImportedFileId", null)
         
         speedSlider.value = targetWpm.toFloat()
         textSizeSlider.value = currentTextSize
@@ -1946,18 +2147,14 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
-    private fun saveCurrentFile(uri: String, extension: String) {
-        sharedPreferences.edit()
-            .putString("currentFileUri", uri)
-            .putString("currentFileExtension", extension)
-            .apply()
-    }
-    
     private fun clearCurrentFile() {
         sharedPreferences.edit()
             .remove("currentFileUri")
             .remove("currentFileExtension")
+            .remove("currentImportedFileId")
             .apply()
+        currentImportedFileId = null
+        currentFileUri = null
     }
     
     private fun restoreLastFile() {
@@ -1992,39 +2189,43 @@ class MainActivity : AppCompatActivity() {
         }
     }
     
-    private fun addToFileHistory(uri: String, extension: String) {
-        val MAX_HISTORY_SIZE = 10
-        val history = getFileHistory().toMutableList()
-        
-        // Rimuovi se già presente
-        history.removeAll { it.first == uri }
-        
-        // Aggiungi all'inizio
-        history.add(0, Pair(uri, extension))
-        
-        // Mantieni solo gli ultimi MAX_HISTORY_SIZE file
-        val limitedHistory = history.take(MAX_HISTORY_SIZE)
-        
-        // Salva la cronologia
-        val historyJson = limitedHistory.joinToString("|") { "${it.first}::${it.second}" }
-        sharedPreferences.edit()
-            .putString("fileHistory", historyJson)
-            .apply()
+    private fun getImportedFilesDir(): File {
+        val dir = File(filesDir, "imported")
+        if (!dir.exists()) dir.mkdirs()
+        return dir
     }
     
-    private fun getFileHistory(): List<Pair<String, String>> {
-        val historyJson = sharedPreferences.getString("fileHistory", "") ?: ""
-        if (historyJson.isEmpty()) return emptyList()
-        
-        return historyJson.split("|")
-            .mapNotNull { entry ->
-                val parts = entry.split("::")
-                if (parts.size == 2) {
-                    Pair(parts[0], parts[1])
-                } else {
-                    null
-                }
-            }
+    /** Lista file importati: (id, displayName, extension). Usa \t come separatore campi (i nomi file non contengono tab). */
+    private fun getImportedFileList(): List<Triple<String, String, String>> {
+        val json = sharedPreferences.getString("importedFiles", "") ?: ""
+        if (json.isEmpty()) return emptyList()
+        return json.split("|").mapNotNull { entry ->
+            val parts = entry.split("\t", limit = 3)
+            if (parts.size == 3) Triple(parts[0], parts[1], parts[2]) else null
+        }
+    }
+    
+    private fun saveImportedFileList(list: List<Triple<String, String, String>>) {
+        val json = list.joinToString("|") { "${it.first}\t${it.second}\t${it.third}" }
+        sharedPreferences.edit().putString("importedFiles", json).apply()
+    }
+    
+    /** Salva il contenuto in app e aggiunge alla lista. Ritorna l'id. */
+    private fun saveImportedFile(content: String, displayName: String, extension: String): String {
+        val id = UUID.randomUUID().toString()
+        val dir = getImportedFilesDir()
+        File(dir, id).writeText(content, Charsets.UTF_8)
+        val list = getImportedFileList().toMutableList()
+        list.add(0, Triple(id, displayName, extension))
+        saveImportedFileList(list)
+        return id
+    }
+    
+    private fun loadImportedFileContent(id: String): String? {
+        return try {
+            val file = File(getImportedFilesDir(), id)
+            if (file.exists()) file.readText(Charsets.UTF_8) else null
+        } catch (_: Exception) { null }
     }
     
     override fun onDestroy() {
