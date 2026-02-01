@@ -67,4 +67,8 @@
     <string name="restore_confirm">Vuoi ripristinare le impostazioni predefinite del telecomando?</string>
     <string name="clear_recent_files">Cancella Recenti</string>
     <string name="clear_recent_confirm">Vuoi cancellare tutti i file recenti?</string>
+    <string name="select_key">Seleziona Tasto</string>
+    <string name="select_click_type">Seleziona il tipo di click:</string>
+    <string name="single_click">Click Singolo</string>
+    <string name="double_click">Doppio Click</string>
 </resources>

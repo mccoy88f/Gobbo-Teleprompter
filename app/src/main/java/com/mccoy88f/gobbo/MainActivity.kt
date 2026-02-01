@@ -65,15 +65,6 @@ class MainActivity : AppCompatActivity() {
     private var lastTabPressTime = 0L
     private val DOUBLE_CLICK_TIME_DELTA = 300 // millisecondi
     
-    // Key capture for customization
-    private var isCapturingKey = false
-    private var capturedKeyCode: Int? = null
-    private var capturedIsDoubleClick = false
-    private var keyCaptureAction: RemoteAction? = null
-    private var keyCaptureDialog: androidx.appcompat.app.AlertDialog? = null
-    private var keyCaptureHandler: Handler? = null
-    private var keyCaptureRunnable: Runnable? = null
-    private var keyCaptureTimer = 10 // seconds
     
     // Remote control mappings
     private enum class RemoteAction {
@@ -192,7 +183,6 @@ class MainActivity : AppCompatActivity() {
         scrollHandler = Handler(Looper.getMainLooper())
         volumeKeyHandler = Handler(Looper.getMainLooper())
         toolbarHideHandler = Handler(Looper.getMainLooper())
-        keyCaptureHandler = Handler(Looper.getMainLooper())
         textView.textSize = currentTextSize
         textView.isClickable = true
         textView.isFocusable = true
@@ -525,19 +515,24 @@ class MainActivity : AppCompatActivity() {
     }
     
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        // Se stiamo catturando un tasto per la personalizzazione, intercetta TUTTI i tasti
-        if (isCapturingKey && keyCaptureAction != null && event?.action == KeyEvent.ACTION_DOWN) {
-            // Ignora alcuni tasti speciali durante la cattura
-            if (keyCode != KeyEvent.KEYCODE_BACK && keyCode != KeyEvent.KEYCODE_MENU) {
-                capturedKeyCode = keyCode
-                capturedIsDoubleClick = false
-                finishKeyCapture()
-                return true
-            }
-        }
-        
         if (event?.action == KeyEvent.ACTION_DOWN) {
-            // Cerca una mappatura personalizzata
+            // Per i tasti volume, lascia che handleVolumeKey gestisca tutto (incluso doppio click)
+            when (keyCode) {
+                KeyEvent.KEYCODE_VOLUME_UP -> {
+                    handleVolumeKey(KeyEvent.KEYCODE_VOLUME_UP, 1)
+                    return true
+                }
+                KeyEvent.KEYCODE_VOLUME_DOWN -> {
+                    handleVolumeKey(KeyEvent.KEYCODE_VOLUME_DOWN, -1)
+                    return true
+                }
+                KeyEvent.KEYCODE_TAB -> {
+                    handleTabKey()
+                    return true
+                }
+            }
+            
+            // Per gli altri tasti, cerca una mappatura personalizzata
             val mapping = findRemoteMapping(keyCode, false)
             if (mapping != null) {
                 executeRemoteAction(mapping.action)
@@ -554,37 +549,12 @@ class MainActivity : AppCompatActivity() {
                     scrollByMode(1)
                     return true
                 }
-                KeyEvent.KEYCODE_TAB -> {
-                    handleTabKey()
-                    return true
-                }
-                KeyEvent.KEYCODE_VOLUME_UP -> {
-                    handleVolumeKey(KeyEvent.KEYCODE_VOLUME_UP, 1)
-                    return true
-                }
-                KeyEvent.KEYCODE_VOLUME_DOWN -> {
-                    handleVolumeKey(KeyEvent.KEYCODE_VOLUME_DOWN, -1)
-                    return true
-                }
             }
         }
         return super.onKeyDown(keyCode, event)
     }
     
     override fun dispatchKeyEvent(event: KeyEvent?): Boolean {
-        // Intercetta i tasti anche durante la cattura usando dispatchKeyEvent
-        // Questo viene chiamato PRIMA di onKeyDown, quindi è più affidabile per la cattura
-        if (isCapturingKey && keyCaptureAction != null && event?.action == KeyEvent.ACTION_DOWN) {
-            val keyCode = event.keyCode
-            // Ignora alcuni tasti speciali durante la cattura
-            if (keyCode != KeyEvent.KEYCODE_BACK && keyCode != KeyEvent.KEYCODE_MENU && 
-                keyCode != KeyEvent.KEYCODE_HOME) {
-                capturedKeyCode = keyCode
-                capturedIsDoubleClick = false
-                finishKeyCapture()
-                return true // Intercetta il tasto
-            }
-        }
         return super.dispatchKeyEvent(event)
     }
     
@@ -951,7 +921,7 @@ class MainActivity : AppCompatActivity() {
             .setItems(actionNames.toTypedArray()) { _, which ->
                 if (which < actions.size) {
                     // Seleziona un'azione da personalizzare
-                    startKeyCapture(actions[which])
+                    showKeySelectionDialog(actions[which])
                 } else {
                     // Ripristina impostazioni predefinite
                     showRestoreDefaultsDialog()
@@ -961,125 +931,59 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
     
-    private fun startKeyCapture(action: RemoteAction) {
-        keyCaptureAction = action
-        isCapturingKey = true
-        keyCaptureTimer = 10
-        capturedKeyCode = null
+    private fun showKeySelectionDialog(action: RemoteAction) {
+        // Lista di tasti disponibili
+        val availableKeys = listOf(
+            Pair(KeyEvent.KEYCODE_DPAD_UP, getString(R.string.key_dpad_up)),
+            Pair(KeyEvent.KEYCODE_DPAD_DOWN, getString(R.string.key_dpad_down)),
+            Pair(KeyEvent.KEYCODE_TAB, getString(R.string.key_tab)),
+            Pair(KeyEvent.KEYCODE_VOLUME_UP, getString(R.string.key_volume_up)),
+            Pair(KeyEvent.KEYCODE_VOLUME_DOWN, getString(R.string.key_volume_down))
+        )
         
-        val actionName = when (action) {
-            RemoteAction.SCROLL_UP -> getString(R.string.action_scroll_up)
-            RemoteAction.SCROLL_DOWN -> getString(R.string.action_scroll_down)
-            RemoteAction.PLAY_PAUSE -> getString(R.string.action_play_pause)
-            RemoteAction.CHANGE_SCROLL_MODE -> getString(R.string.action_change_scroll_mode)
-            RemoteAction.INCREASE_SPEED -> getString(R.string.action_increase_speed)
-            RemoteAction.DECREASE_SPEED -> getString(R.string.action_decrease_speed)
-            RemoteAction.INCREASE_TEXT_SIZE -> getString(R.string.action_increase_text_size)
-            RemoteAction.DECREASE_TEXT_SIZE -> getString(R.string.action_decrease_text_size)
-        }
+        val keyNames = availableKeys.map { it.second }.toTypedArray()
         
-        val dialogView = layoutInflater.inflate(android.R.layout.simple_list_item_1, null)
-        val textView = dialogView.findViewById<android.widget.TextView>(android.R.id.text1)
-        textView.text = getString(R.string.press_key_for_action, actionName)
-        textView.textSize = 18f
-        textView.gravity = android.view.Gravity.CENTER
-        textView.setPadding(32, 32, 32, 32)
-        
-        val timerView = android.widget.TextView(this)
-        timerView.text = getString(R.string.timeout_in, keyCaptureTimer)
-        timerView.textSize = 16f
-        timerView.gravity = android.view.Gravity.CENTER
-        timerView.setPadding(32, 16, 32, 32)
-        
-        val layout = android.widget.LinearLayout(this).apply {
-            orientation = android.widget.LinearLayout.VERTICAL
-            gravity = android.view.Gravity.CENTER
-            addView(textView)
-            addView(timerView)
-        }
-        
-        keyCaptureDialog = MaterialAlertDialogBuilder(this)
-            .setTitle(getString(R.string.customize_remote))
-            .setView(layout)
-            .setCancelable(false)
-            .setNegativeButton(getString(R.string.cancel)) { _, _ ->
-                cancelKeyCapture()
+        MaterialAlertDialogBuilder(this)
+            .setTitle(getString(R.string.select_key))
+            .setItems(keyNames) { _, which ->
+                val selectedKey = availableKeys[which]
+                
+                // Chiedi se è un doppio click
+                MaterialAlertDialogBuilder(this)
+                    .setTitle(getString(R.string.select_key))
+                    .setMessage(getString(R.string.select_click_type))
+                    .setPositiveButton(getString(R.string.key_single_click)) { _, _ ->
+                        saveKeyMapping(action, selectedKey.first, false)
+                    }
+                    .setNegativeButton(getString(R.string.key_double_click)) { _, _ ->
+                        saveKeyMapping(action, selectedKey.first, true)
+                    }
+                    .setNeutralButton(getString(R.string.cancel), null)
+                    .show()
             }
-            .create()
-        
-        // Imposta un listener per intercettare i tasti nel dialog
-        keyCaptureDialog?.setOnKeyListener { _, keyCode, event ->
-            if (isCapturingKey && keyCaptureAction != null && event.action == KeyEvent.ACTION_DOWN) {
-                if (keyCode != KeyEvent.KEYCODE_BACK && keyCode != KeyEvent.KEYCODE_MENU) {
-                    capturedKeyCode = keyCode
-                    capturedIsDoubleClick = false
-                    finishKeyCapture()
-                    true
-                } else {
-                    false
-                }
-            } else {
-                false
-            }
-        }
-        
-        keyCaptureDialog?.show()
-        
-        // Avvia il timer
-        keyCaptureRunnable = object : Runnable {
-            override fun run() {
-                if (isCapturingKey && keyCaptureTimer > 0) {
-                    timerView.text = getString(R.string.timeout_in, keyCaptureTimer)
-                    keyCaptureTimer--
-                    keyCaptureHandler?.postDelayed(this, 1000)
-                } else if (isCapturingKey) {
-                    // Timeout scaduto
-                    keyCaptureDialog?.dismiss()
-                    Toast.makeText(this@MainActivity, getString(R.string.timeout_expired), Toast.LENGTH_SHORT).show()
-                    isCapturingKey = false
-                    keyCaptureAction = null
-                }
-            }
-        }
-        keyCaptureHandler?.post(keyCaptureRunnable!!)
+            .setNegativeButton(getString(R.string.cancel), null)
+            .show()
     }
     
-    private fun finishKeyCapture() {
-        if (!isCapturingKey || keyCaptureAction == null || capturedKeyCode == null) {
-            return
-        }
-        
-        isCapturingKey = false
-        keyCaptureHandler?.removeCallbacks(keyCaptureRunnable!!)
-        keyCaptureDialog?.dismiss()
-        
+    private fun saveKeyMapping(action: RemoteAction, keyCode: Int, isDoubleClick: Boolean) {
         // Rimuovi mappature esistenti per questa azione
-        remoteMappings.removeAll { it.action == keyCaptureAction }
+        remoteMappings.removeAll { it.action == action }
         
         // Aggiungi nuova mappatura
-        remoteMappings.add(RemoteKeyMapping(capturedKeyCode!!, capturedIsDoubleClick, keyCaptureAction!!))
+        remoteMappings.add(RemoteKeyMapping(keyCode, isDoubleClick, action))
         saveRemoteMappings()
         
-        val keyName = when (capturedKeyCode) {
+        val keyName = when (keyCode) {
             KeyEvent.KEYCODE_DPAD_UP -> getString(R.string.key_dpad_up)
             KeyEvent.KEYCODE_DPAD_DOWN -> getString(R.string.key_dpad_down)
             KeyEvent.KEYCODE_TAB -> getString(R.string.key_tab)
             KeyEvent.KEYCODE_VOLUME_UP -> getString(R.string.key_volume_up)
             KeyEvent.KEYCODE_VOLUME_DOWN -> getString(R.string.key_volume_down)
-            else -> "Key $capturedKeyCode"
+            else -> "Key $keyCode"
         }
         
-        Toast.makeText(this, getString(R.string.key_captured, keyName), Toast.LENGTH_SHORT).show()
-        
-        keyCaptureAction = null
-        capturedKeyCode = null
-    }
-    
-    private fun cancelKeyCapture() {
-        isCapturingKey = false
-        keyCaptureHandler?.removeCallbacks(keyCaptureRunnable!!)
-        keyCaptureAction = null
-        capturedKeyCode = null
+        val clickType = if (isDoubleClick) getString(R.string.key_double_click) else getString(R.string.key_single_click)
+        Toast.makeText(this, "$keyName ($clickType) - ${getString(R.string.save)}", Toast.LENGTH_SHORT).show()
     }
     
     private fun showRestoreDefaultsDialog() {
@@ -1330,12 +1234,9 @@ class MainActivity : AppCompatActivity() {
         super.onDestroy()
         stopAutoScroll()
         stopVolumeKeyRepeat()
-        cancelKeyCapture()
         scrollHandler?.removeCallbacksAndMessages(null)
         volumeKeyHandler?.removeCallbacksAndMessages(null)
         toolbarHideHandler?.removeCallbacksAndMessages(null)
-        keyCaptureHandler?.removeCallbacksAndMessages(null)
         progressDialog?.dismiss()
-        keyCaptureDialog?.dismiss()
     }
 }
