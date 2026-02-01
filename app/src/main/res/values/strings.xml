@@ -7,6 +7,7 @@
     <string name="play">Avvia</string>
     <string name="pause">Pausa</string>
     <string name="speed">Velocità</string>
+    <string name="words_per_min">Parole/min</string>
     <string name="text_size">Dimensione Testo</string>
     <string name="dark_mode">Modalità Scura</string>
     <string name="light_mode">Modalità Chiara</string>
@@ -30,7 +31,7 @@
     <string name="settings">Impostazioni</string>
     <string name="remote_settings">Impostazioni Telecomando</string>
     <string name="credits">Informazioni Applicazione</string>
-    <string name="credits_text">Gobbo Teleprompter\n\nAutore: McCoy88f\nNome: Antonello Migliorelli\n\nVersione: 1.3.0\n\nUn teleprompter professionale per Android\n\nRepository:\nhttps://github.com/mccoy88f/Gobbo-Teleprompter</string>
+    <string name="credits_text">Gobbo Teleprompter\n\nAutore: McCoy88f\nNome: Antonello Migliorelli\n\nVersione: 1.4.0\n\nUn teleprompter professionale per Android\n\nRepository:\nhttps://github.com/mccoy88f/Gobbo-Teleprompter</string>
     <string name="check_updates">Verifica Aggiornamenti</string>
     <string name="checking_updates">Verifica aggiornamenti in corso…</string>
     <string name="update_available">Aggiornamento Disponibile</string>
@@ -144,4 +145,9 @@
     <string name="file_too_large">File troppo grande</string>
     <string name="file_too_large_message">Il file selezionato è molto grande (%1$s). Il caricamento potrebbe richiedere molto tempo o causare problemi di memoria.\n\nVuoi continuare comunque?</string>
     <string name="continue_anyway">Continua comunque</string>
+    <string name="wpm_display">~%d parole/min</string>
+    <string name="wpm_na">—</string>
+    <string name="set_target_wpm">Imposta WPM</string>
+    <string name="target_wpm">WPM desiderati</string>
+    <string name="wpm_hint">es. 120</string>
 </resources>

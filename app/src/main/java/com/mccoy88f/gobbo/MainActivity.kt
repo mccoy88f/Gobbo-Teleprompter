@@ -50,11 +50,13 @@ class MainActivity : AppCompatActivity() {
     private lateinit var speedSlider: Slider
     private lateinit var textSizeSlider: Slider
     private lateinit var controlsLayout: android.widget.LinearLayout
+    private lateinit var wpmText: android.widget.TextView
+    private lateinit var btnSetWpm: MaterialButton
     
     private var isPlaying = false
     private var scrollHandler: Handler? = null
     private var scrollRunnable: Runnable? = null
-    private var currentSpeed = 5f
+    private var targetWpm = 120
     private var currentTextSize = 24f
     private var isDarkMode = false
     private var scrollMode = 0 // 0 = pagina intera, 1 = metà pagina, 2 = 3 righe
@@ -240,6 +242,8 @@ class MainActivity : AppCompatActivity() {
         speedSlider = findViewById(R.id.speedSlider)
         textSizeSlider = findViewById(R.id.textSizeSlider)
         controlsLayout = findViewById(R.id.controlsLayout)
+        wpmText = findViewById(R.id.wpmText)
+        btnSetWpm = findViewById(R.id.btnSetWpm)
         
         // Disabilita la navigazione con Tab per i controlli
         // Questo impedisce che Tab cambi il focus tra i controlli
@@ -247,6 +251,7 @@ class MainActivity : AppCompatActivity() {
         btnScrollMode.isFocusable = false
         speedSlider.isFocusable = false
         textSizeSlider.isFocusable = false
+        btnSetWpm.isFocusable = false
         controlsLayout.isFocusable = false
         controlsLayout.isFocusableInTouchMode = false
         scrollView.isFocusable = false
@@ -271,7 +276,7 @@ class MainActivity : AppCompatActivity() {
         }
         
         // Imposta stepSize per gli slider
-        speedSlider.stepSize = 1f
+        speedSlider.stepSize = 1f // WPM: valori interi 60-250
         textSizeSlider.stepSize = 2f
         
         // Carica impostazioni salvate (tranne isDarkMode che è già stato caricato)
@@ -282,6 +287,9 @@ class MainActivity : AppCompatActivity() {
         
         // Applica font
         applyFont()
+        
+        // Aggiorna WPM dopo che il layout è pronto (altezze disponibili)
+        scrollView.post { updateWpmDisplay() }
     }
     
     private fun setupListeners() {
@@ -304,13 +312,16 @@ class MainActivity : AppCompatActivity() {
         }
         
         speedSlider.addOnChangeListener { _, value, _ ->
-            currentSpeed = value
-            saveSettings() // Salva immediatamente quando cambia
+            targetWpm = value.toInt().coerceIn(60, 250)
+            saveSettings()
+            updateWpmDisplay()
             if (isPlaying) {
                 stopAutoScroll()
                 startAutoScroll()
             }
         }
+        
+        btnSetWpm.setOnClickListener { showSetWpmDialog() }
         
         textSizeSlider.addOnChangeListener { _, value, _ ->
             currentTextSize = value
@@ -341,6 +352,7 @@ class MainActivity : AppCompatActivity() {
                         .putString("savedTextExtension", "txt")
                         .apply()
                     scrollView.scrollTo(0, 0)
+                    scrollView.post { updateWpmDisplay() }
                 } else {
                     Toast.makeText(this, getString(R.string.no_text_loaded), Toast.LENGTH_SHORT).show()
                 }
@@ -449,6 +461,7 @@ class MainActivity : AppCompatActivity() {
                         }
                         
                         scrollView.scrollTo(0, 0)
+                        scrollView.post { updateWpmDisplay() }
                         Toast.makeText(this@MainActivity, getString(R.string.file_imported), Toast.LENGTH_SHORT).show()
                     } else {
                         Toast.makeText(this@MainActivity, getString(R.string.no_text_loaded), Toast.LENGTH_SHORT).show()
@@ -487,10 +500,11 @@ class MainActivity : AppCompatActivity() {
         }
         hideToolbar()
         
+        val scrollSpeed = getScrollSpeedFromWpm()
         scrollRunnable = object : Runnable {
             override fun run() {
                 if (isPlaying) {
-                    val scrollAmount = (currentSpeed * 2).toInt()
+                    val scrollAmount = (scrollSpeed * 2).toInt()
                     scrollView.smoothScrollBy(0, scrollAmount)
                     
                     // Controlla se abbiamo raggiunto la fine
@@ -778,18 +792,90 @@ class MainActivity : AppCompatActivity() {
     
     
     private fun adjustSpeed(direction: Int) {
-        val newSpeed = (currentSpeed + direction).coerceIn(speedSlider.valueFrom, speedSlider.valueTo)
-        if (newSpeed != currentSpeed) {
-            currentSpeed = newSpeed
-            speedSlider.value = currentSpeed
-            saveSettings() // Salva quando cambia tramite telecomando
-            
-            // Se lo scorrimento è attivo, riavvialo con la nuova velocità
+        val step = 10
+        val newWpm = (targetWpm + direction * step).coerceIn(60, 250)
+        if (newWpm != targetWpm) {
+            targetWpm = newWpm
+            speedSlider.value = targetWpm.toFloat()
+            saveSettings()
+            updateWpmDisplay()
             if (isPlaying) {
                 stopAutoScroll()
                 startAutoScroll()
             }
         }
+    }
+    
+    /** Conta le parole nel testo corrente (raw text, per calcolo WPM). */
+    private fun countWords(): Int {
+        val raw = savedText ?: textView.text?.toString().orEmpty()
+        if (raw.isEmpty() || raw == getString(R.string.enter_text)) return 0
+        return raw.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }.size
+    }
+    
+    /**
+     * Restituisce la velocità di scorrimento (float) in unità slider-equivalenti:
+     * scroll = speed * 2 px ogni 50 ms = 40 * speed px/s.
+     * Calcolata da targetWpm: speed = targetWpm * totalScrollDistance / (words * 60 * 40).
+     * Se non c'è testo o distanza nulla, restituisce un default (5f).
+     */
+    private fun getScrollSpeedFromWpm(): Float {
+        val words = countWords()
+        if (words == 0) return 5f
+        val contentHeight = scrollView.getChildAt(0)?.height ?: return 5f
+        val viewportHeight = scrollView.height
+        val totalScrollDistance = (contentHeight - viewportHeight).coerceAtLeast(0)
+        if (totalScrollDistance <= 0) return 5f
+        return (targetWpm * totalScrollDistance) / (words * 60 * 40f)
+    }
+    
+    /** WPM attuale: con testo caricato coincide con targetWpm (valore impostato dall'utente). */
+    private fun getCurrentWpm(): Int? {
+        val words = countWords()
+        if (words == 0) return null
+        val contentHeight = scrollView.getChildAt(0)?.height ?: return null
+        val viewportHeight = scrollView.height
+        val totalScrollDistance = (contentHeight - viewportHeight).coerceAtLeast(0)
+        if (totalScrollDistance <= 0) return null
+        return targetWpm
+    }
+    
+    private fun updateWpmDisplay() {
+        val wpm = getCurrentWpm()
+        wpmText.text = if (wpm != null) getString(R.string.wpm_display, wpm) else getString(R.string.wpm_na)
+    }
+    
+    private fun showSetWpmDialog() {
+        val dialogView = layoutInflater.inflate(R.layout.dialog_text_input, null)
+        val textInputEditText = dialogView.findViewById<TextInputEditText>(R.id.textInputEditText)
+        val textInputLayout = dialogView.findViewById<TextInputLayout>(R.id.textInputLayout)
+        textInputLayout?.hint = getString(R.string.target_wpm)
+        textInputLayout?.isCounterEnabled = false
+        textInputEditText.hint = getString(R.string.wpm_hint)
+        textInputEditText.setText(targetWpm.toString())
+        textInputEditText.setSelection(textInputEditText.text?.length ?: 0)
+        textInputEditText.inputType = android.text.InputType.TYPE_CLASS_NUMBER
+        textInputEditText.setRawInputType(android.text.InputType.TYPE_CLASS_NUMBER)
+        textInputEditText.setLines(1)
+        
+        MaterialAlertDialogBuilder(this)
+            .setTitle(getString(R.string.set_target_wpm))
+            .setView(dialogView)
+            .setPositiveButton(getString(R.string.ok)) { _, _ ->
+                val input = textInputEditText.text?.toString()?.trim() ?: ""
+                val wpm = input.toIntOrNull()?.coerceIn(60, 500) ?: return@setPositiveButton
+                targetWpm = wpm.coerceIn(60, 250)
+                speedSlider.value = targetWpm.toFloat()
+                saveSettings()
+                updateWpmDisplay()
+                if (isPlaying) {
+                    stopAutoScroll()
+                    startAutoScroll()
+                }
+                Toast.makeText(this, getString(R.string.wpm_display, targetWpm), Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton(getString(R.string.cancel), null)
+            .show()
     }
     
     private fun showFileMenu() {
@@ -1492,7 +1578,7 @@ class MainActivity : AppCompatActivity() {
     
     private fun saveSettings() {
         sharedPreferences.edit()
-            .putFloat("currentSpeed", currentSpeed)
+            .putInt("targetWpm", targetWpm)
             .putFloat("currentTextSize", currentTextSize)
             .putInt("scrollMode", scrollMode)
             .putString("currentFont", currentFont)
@@ -1501,16 +1587,24 @@ class MainActivity : AppCompatActivity() {
     }
     
     private fun loadSettings() {
-        // Carica velocità e dimensione testo
-        currentSpeed = sharedPreferences.getFloat("currentSpeed", 5f)
+        // Migrazione: se esiste ancora currentSpeed (vecchia versione), converti in targetWpm approssimativo
+        targetWpm = if (sharedPreferences.contains("targetWpm")) {
+            sharedPreferences.getInt("targetWpm", 120).coerceIn(60, 250)
+        } else if (sharedPreferences.contains("currentSpeed")) {
+            val oldSpeed = sharedPreferences.getFloat("currentSpeed", 5f)
+            (60 + (oldSpeed - 1) * (200 - 60) / 19).toInt().coerceIn(60, 250)
+        } else {
+            120
+        }
         currentTextSize = sharedPreferences.getFloat("currentTextSize", 24f)
         scrollMode = sharedPreferences.getInt("scrollMode", 0)
         currentFont = sharedPreferences.getString("currentFont", "default") ?: "default"
         
-        // Applica i valori agli slider
-        speedSlider.value = currentSpeed
+        speedSlider.value = targetWpm.toFloat()
         textSizeSlider.value = currentTextSize
         textView.textSize = currentTextSize
+        
+        scrollView.post { updateWpmDisplay() }
         
         // Carica mappature remote
         loadRemoteMappings()

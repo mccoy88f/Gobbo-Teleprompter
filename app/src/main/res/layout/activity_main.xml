@@ -87,7 +87,7 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="@string/speed"
+                android:text="@string/words_per_min"
                 android:textColor="?attr/colorOnSurface"
                 android:textSize="14sp"
                 android:layout_marginBottom="4dp" />
@@ -96,9 +96,33 @@
                 android:id="@+id/speedSlider"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:valueFrom="1"
-                android:valueTo="20"
-                android:value="5" />
+                android:valueFrom="60"
+                android:valueTo="250"
+                android:value="120" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginTop="4dp">
+
+                <TextView
+                    android:id="@+id/wpmText"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:textColor="?attr/colorOnSurfaceVariant"
+                    android:textSize="13sp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnSetWpm"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/set_target_wpm"
+                    android:textAllCaps="false" />
+            </LinearLayout>
         </LinearLayout>
 
         <LinearLayout
