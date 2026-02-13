@@ -206,6 +206,17 @@ Access settings via the **Settings** icon in the toolbar:
 
 **McCoy88f** (Antonello Migliorelli)
 
+## ⚠️ Please read carefully!
+
+Working on this addon and keeping it updated has taken countless hours and dedication ❤️
+A coffee ☕ or a beer 🍺 is a much appreciated gesture of recognition and helps me continue to maintain this project active!
+
+**With a donation, you'll be added to a dedicated Telegram group where you'll receive new versions in advance! I'll be waiting for you!**
+
+<a href="https://www.buymeacoffee.com/mccoy88f"><img src="https://img.buymeacoffee.com/button-api/?text=Buy me a beer&emoji=🍺&slug=mccoy88f&button_colour=FFDD00&font_colour=000000&font_family=Bree&outline_colour=000000&coffee_colour=ffffff" /></a>
+
+[You can also buy me a beer with PayPal 🍻](https://paypal.me/mccoy88f?country.x=US&locale.x=en_US)
+
 ## License
 
 This project is licensed under the **Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International License** (CC BY-NC-SA 4.0).
