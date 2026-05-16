@@ -3,11 +3,16 @@
     xmlns:app="http://schemas.android.com/apk/res-auto">
     
     <item
-        android:id="@+id/menu_file"
+        android:id="@+id/menu_playlist"
         android:icon="@drawable/ic_file"
-        android:title="@string/file_menu"
+        android:title="@string/playlist_menu"
         app:showAsAction="ifRoom"
         app:iconTint="?attr/colorOnSurface" />
+
+    <item
+        android:id="@+id/menu_timer_reset"
+        android:title="@string/timer_reset"
+        app:showAsAction="never" />
     
     <item
         android:id="@+id/menu_toggle_controls"

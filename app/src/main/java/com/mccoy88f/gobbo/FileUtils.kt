@@ -9,16 +9,27 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 
 object FileUtils {
+
+    fun readTextUsingStream(inputStream: java.io.InputStream, extension: String): String? {
+        return try {
+            inputStream.use { ist ->
+                when (extension.lowercase()) {
+                    "docx" -> readDocx(ist)
+                    "pdf" -> try { readPdf(ist) } catch (e: Throwable) { e.printStackTrace(); null }
+                    "rtf" -> readRtf(ist)
+                    else -> readPlainText(ist)
+                }
+            }
+        } catch (e: Throwable) {
+            e.printStackTrace()
+            null
+        }
+    }
     
     fun readTextFile(context: Context, uri: Uri, extension: String): String? {
         return try {
             context.contentResolver.openInputStream(uri)?.use { inputStream ->
-                when (extension.lowercase()) {
-                    "docx" -> readDocx(inputStream)
-                    "pdf" -> try { readPdf(inputStream) } catch (e: Throwable) { e.printStackTrace(); null }
-                    "rtf" -> readRtf(inputStream)
-                    else -> readPlainText(inputStream)
-                }
+                readTextUsingStream(inputStream, extension)
             }
         } catch (e: Throwable) {
             e.printStackTrace()

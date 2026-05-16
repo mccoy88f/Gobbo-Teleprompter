@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="vertical"
+    android:paddingVertical="10dp"
+    android:paddingHorizontal="4dp"
+    android:background="?attr/selectableItemBackground">
+
+    <TextView
+        android:id="@+id/playlistItemName"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textColor="?attr/colorOnSurface"
+        android:textSize="14sp"
+        android:maxLines="2"
+        android:ellipsize="end" />
+
+    <TextView
+        android:id="@+id/playlistItemMeta"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:textSize="11sp"
+        android:textColor="?attr/colorOnSurfaceVariant"
+        android:layout_marginTop="2dp" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:layout_marginTop="6dp">
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnPlaylistEdit"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:minHeight="36dp"
+            android:text="@string/playlist_edit_item"
+            android:textSize="11sp"
+            android:paddingHorizontal="4dp" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnPlaylistRemove"
+            style="@style/Widget.Material3.Button.TextButton"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:minHeight="36dp"
+            android:text="@string/delete_file"
+            android:textSize="11sp"
+            android:paddingHorizontal="4dp"
+            android:textColor="?attr/colorError" />
+    </LinearLayout>
+</LinearLayout>

@@ -82,6 +82,26 @@ class WebServer(
                 if (value != null) controller.onSetTextSize(value)
                 okJson("""{"ok":true}""")
             }
+            uri.startsWith("/api/playlist-next") && (method == Method.POST || method == Method.GET) -> {
+                controller.onPlaylistNext()
+                okJson("""{"ok":true}""")
+            }
+            uri.startsWith("/api/playlist-prev") && (method == Method.POST || method == Method.GET) -> {
+                controller.onPlaylistPrev()
+                okJson("""{"ok":true}""")
+            }
+            uri.startsWith("/api/timer-reset") && (method == Method.POST || method == Method.GET) -> {
+                controller.onTimerResetRemote()
+                okJson("""{"ok":true}""")
+            }
+            uri.startsWith("/api/timer-stop") && (method == Method.POST || method == Method.GET) -> {
+                controller.stopPresentationTimerCommitRemote()
+                okJson("""{"ok":true}""")
+            }
+            uri.startsWith("/api/playlist-pin-toggle") && (method == Method.POST || method == Method.GET) -> {
+                controller.togglePlaylistDrawerPinRemote()
+                okJson("""{"ok":true}""")
+            }
             uri.startsWith("/api/scroll-mode") -> {
                 val params = session.getParms()
                 val value = paramValue(params, "value")?.toIntOrNull()?.coerceIn(0, 2)
@@ -134,7 +154,11 @@ class WebServer(
 
     private fun serveState(): Response {
         val state = controller.getState()
-        val json = """{"playing":${state.playing},"wpm":${state.wpm},"textSize":${state.textSize},"hasText":${state.hasText},"scrollMode":${state.scrollMode}}"""
+        val remJson = state.timerRemainingSeconds?.toString() ?: "null"
+        val titleLit = escapeJson(state.playlistCurrentTitle)
+        val bannerLit = escapeJson(state.timerBannerText)
+        val plNameLit = escapeJson(state.playlistName)
+        val json = """{"playing":${state.playing},"wpm":${state.wpm},"textSize":${state.textSize},"hasText":${state.hasText},"scrollMode":${state.scrollMode},"playlistCurrentIndex":${state.playlistCurrentIndex},"playlistSize":${state.playlistSize},"playlistTotalSeconds":${state.playlistTotalSeconds},"playlistTitle":$titleLit,"playlistName":$plNameLit,"playlistDrawerPinned":${state.playlistDrawerPinned},"timerRemainingSeconds":$remJson,"timerAllottedSeconds":${state.timerAllottedSeconds},"timerSessionStarted":${state.timerSessionStarted},"timerBannerText":$bannerLit}"""
         return okJson(json)
     }
 
@@ -204,6 +228,7 @@ class WebServer(
     body { font-family: 'Roboto', sans-serif; margin: 0; padding: 16px; background: #f5f5f5; min-height: 100vh; }
     .mdc-card { max-width: 420px; margin: 0 auto 16px; padding: 24px; border-radius: 12px; }
     .title { font-size: 20px; font-weight: 500; margin: 0 0 4px; color: #1f1f1f; }
+    .timer-banner { text-align: center; font-weight: 700; font-size: clamp(26px, 8vw, 42px); line-height: 1.15; margin: 8px 0 12px; letter-spacing: 0.06em; cursor: pointer; }
     .device-name { font-size: 14px; color: #5f6368; margin: 0 0 16px; }
     .row { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
     .row .mdc-button { flex: 1; min-width: 100px; }
@@ -218,6 +243,7 @@ class WebServer(
 <body>
   <div class="mdc-card" style="background: #fff;">
     <h1 class="title">Gobbo Teleprompter</h1>
+    <div id="timerBanner" class="timer-banner" role="button" tabindex="0" title="Interrompi timer e salva durata sulla traccia" aria-live="polite" style="display:none;"></div>
     <p class="device-name" id="deviceName" style="{{DEVICE_NAME_VISIBLE}}">{{DEVICE_NAME}}</p>
     <p class="status" id="status">Caricamento…</p>
 
@@ -248,12 +274,28 @@ class WebServer(
     <div class="label">Dimensione testo</div>
     <input type="range" class="mdc-slider" id="textSizeSlider" min="12" max="48" value="24" step="2" aria-label="Dimensione testo">
 
-    <div class="label">File importati</div>
+    <div class="label">Playlist (sull'app Gobbo)</div>
+    <div class="row">
+      <button type="button" class="mdc-button mdc-button--outlined" id="btnPlaylistPrev">
+        <span class="mdc-button__label">◀ prec.</span>
+      </button>
+      <button type="button" class="mdc-button mdc-button--outlined" id="btnPlaylistNext">
+        <span class="mdc-button__label">succ. ▶</span>
+      </button>
+      <button type="button" class="mdc-button mdc-button--outlined" id="btnTimerReset">
+        <span class="mdc-button__label">Ripristino timer</span>
+      </button>
+    </div>
+    <div class="row">
+      <button type="button" class="mdc-button mdc-button--outlined" id="btnPlaylistPin" style="flex:1;">
+        <span class="mdc-button__label" id="lblPlaylistPin">Blocca playlist</span>
+      </button>
+    </div>
     <select id="recentFiles">
-      <option value="">— Seleziona un file —</option>
+      <option value="">— Seleziona voce playlist —</option>
     </select>
     <button type="button" class="mdc-button mdc-button--outlined" id="btnLoadRecent" style="margin-top:8px;width:100%;">
-      <span class="mdc-button__label">Apri file selezionato</span>
+      <span class="mdc-button__label">Carica voce selezionata</span>
     </button>
   </div>
 
@@ -266,6 +308,7 @@ class WebServer(
         return path + (AUTH_TOKEN ? sep + 'token=' + encodeURIComponent(AUTH_TOKEN) : '');
       }
       const statusEl = document.getElementById('status');
+      const timerBanner = document.getElementById('timerBanner');
       const playLabel = document.getElementById('playLabel');
       const btnPlayPause = document.getElementById('btnPlayPause');
       const btnScrollUp = document.getElementById('btnScrollUp');
@@ -276,6 +319,11 @@ class WebServer(
       const textSizeSlider = document.getElementById('textSizeSlider');
       const recentFiles = document.getElementById('recentFiles');
       const btnLoadRecent = document.getElementById('btnLoadRecent');
+      const btnPlaylistPrev = document.getElementById('btnPlaylistPrev');
+      const btnPlaylistNext = document.getElementById('btnPlaylistNext');
+      const btnTimerReset = document.getElementById('btnTimerReset');
+      const btnPlaylistPin = document.getElementById('btnPlaylistPin');
+      const lblPlaylistPin = document.getElementById('lblPlaylistPin');
 
       function api(method, path) {
         return fetch(authUrl(path), { method: method || 'GET' }).then(r => r.json()).catch(() => ({}));
@@ -290,7 +338,34 @@ class WebServer(
 
       function poll() {
         fetch(authUrl('/api/state')).then(r => r.json()).then(s => {
-          statusEl.textContent = s.hasText ? (s.playing ? 'In riproduzione' : 'In pausa') + ' · ' + s.wpm + ' parole/min' : 'Nessun testo caricato';
+          var playback = s.hasText ? (s.playing ? 'In riproduzione' : 'In pausa') + ' · ' + s.wpm + ' parole/min' : 'Nessun testo caricato';
+          var pl = '';
+          if ((s.playlistSize || 0) > 0 && s.playlistTitle) {
+            pl = ' · #' + (s.playlistCurrentIndex + 1) + '/' + s.playlistSize + ': ' + s.playlistTitle;
+          }
+          var ply = '';
+          if (s.playlistName) ply = ' · ' + s.playlistName;
+          statusEl.textContent = playback + pl + ply;
+
+          if (timerBanner) {
+            if (s.timerBannerText) {
+              timerBanner.style.display = 'block';
+              timerBanner.textContent = s.timerBannerText;
+              if (typeof s.timerRemainingSeconds === 'number' && s.timerRemainingSeconds < 0) {
+                timerBanner.style.color = '#c62828';
+              } else if ((s.timerAllottedSeconds || 0) <= 0 && s.timerSessionStarted) {
+                timerBanner.style.color = '#00897b';
+              } else if (s.timerSessionStarted) {
+                timerBanner.style.color = '#1565c0';
+              } else {
+                timerBanner.style.color = '#1b5e20';
+              }
+            } else {
+              timerBanner.style.display = 'none';
+              timerBanner.textContent = '';
+            }
+          }
+
           playLabel.textContent = s.playing ? 'Pausa' : 'Avvia';
           var w = s.wpm || 120;
           var editingWpm = document.activeElement === wpmInput || document.activeElement === wpmSlider;
@@ -299,16 +374,18 @@ class WebServer(
             wpmInput.value = w;
           }
           textSizeSlider.value = Math.max(12, Math.min(48, s.textSize || 24));
+          if (lblPlaylistPin) lblPlaylistPin.textContent = (s.playlistDrawerPinned === true)
+            ? 'Sblocca playlist' : 'Blocca playlist';
         }).catch(() => statusEl.textContent = 'Disconnesso');
       }
 
       function loadRecentFiles() {
         fetch(authUrl('/api/recent-files')).then(r => r.json()).then(arr => {
-          recentFiles.innerHTML = '<option value="">— Seleziona un file —</option>';
+          recentFiles.innerHTML = '<option value="">— Voce playlist —</option>';
           (arr || []).forEach(f => {
             const opt = document.createElement('option');
             opt.value = f.index;
-            opt.textContent = f.name || ('File ' + (f.index + 1));
+            opt.textContent = f.name || ('Voce ' + (f.index + 1));
             recentFiles.appendChild(opt);
           });
         });
@@ -317,6 +394,23 @@ class WebServer(
       btnPlayPause.addEventListener('click', () => api('POST', '/api/play-pause').then(poll));
       btnScrollUp.addEventListener('click', () => api('POST', '/api/scroll?dir=up'));
       btnScrollDown.addEventListener('click', () => api('POST', '/api/scroll?dir=down'));
+
+      if (btnPlaylistPrev) btnPlaylistPrev.addEventListener('click', () => api('POST', '/api/playlist-prev').then(() => { poll(); loadRecentFiles(); }));
+      if (btnPlaylistNext) btnPlaylistNext.addEventListener('click', () => api('POST', '/api/playlist-next').then(() => { poll(); loadRecentFiles(); }));
+      if (btnTimerReset) btnTimerReset.addEventListener('click', () => api('POST', '/api/timer-reset').then(poll));
+      if (btnPlaylistPin) btnPlaylistPin.addEventListener('click', () => api('POST', '/api/playlist-pin-toggle').then(poll));
+
+      if (timerBanner) {
+        function stopTimerFromBanner(ev) {
+          ev.preventDefault();
+          if (timerBanner.style.display === 'none' || !timerBanner.textContent) return;
+          api('POST', '/api/timer-stop').then(poll);
+        }
+        timerBanner.addEventListener('click', stopTimerFromBanner);
+        timerBanner.addEventListener('keydown', function(e) {
+          if (e.key === 'Enter' || e.key === ' ') stopTimerFromBanner(e);
+        });
+      }
 
       wpmSlider.addEventListener('input', () => { wpmInput.value = wpmSlider.value; });
       wpmSlider.addEventListener('change', () => setWpm(wpmSlider.value).then(poll));

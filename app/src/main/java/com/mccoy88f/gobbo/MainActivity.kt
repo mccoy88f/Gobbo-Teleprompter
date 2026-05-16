@@ -13,20 +13,33 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.content.ContextCompat
+import androidx.core.view.GravityCompat
+import androidx.drawerlayout.widget.DrawerLayout
+import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.recyclerview.widget.RecyclerView
+import com.google.android.material.materialswitch.MaterialSwitch
 import androidx.core.widget.NestedScrollView
+import com.google.android.material.card.MaterialCardView
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.color.MaterialColors
 import com.google.android.material.slider.Slider
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
+import android.text.Spannable
 import android.text.SpannableString
+import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
 import android.text.style.RelativeSizeSpan
 import android.text.util.Linkify
 import android.text.method.LinkMovementMethod
+import android.graphics.Color
 import android.graphics.Typeface
 import android.content.SharedPreferences
+import android.content.res.ColorStateList
 import android.net.Uri
+import android.util.TypedValue
+import android.view.View
 import androidx.preference.PreferenceManager.getDefaultSharedPreferences
 import android.provider.OpenableColumns
 import android.database.Cursor
@@ -50,6 +63,8 @@ import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicReference
 import java.io.File
+import java.io.FileOutputStream
+import java.io.FileInputStream
 
 class MainActivity : AppCompatActivity(), WebRemoteController {
     
@@ -62,6 +77,8 @@ class MainActivity : AppCompatActivity(), WebRemoteController {
     private lateinit var controlsLayout: android.widget.LinearLayout
     private lateinit var wpmText: android.widget.TextView
     private lateinit var btnSetWpm: MaterialButton
+    private lateinit var timerBubble: MaterialCardView
+    private lateinit var timerBubbleText: android.widget.TextView
     
     private var isPlaying = false
     private var scrollHandler: Handler? = null
@@ -83,6 +100,32 @@ class MainActivity : AppCompatActivity(), WebRemoteController {
     private var downloadId: Long = -1
     private var downloadReceiver: BroadcastReceiver? = null
     
+    private lateinit var playlistStore: PlaylistStore
+    private var playlist: Playlist = Playlist(name = PlaylistStore.DEFAULT_NAME)
+    private lateinit var drawerLayout: DrawerLayout
+    private lateinit var recyclerPlaylistItems: RecyclerView
+    private var playlistDrawerPinned = false
+    private val playlistAutoCloseHandler = Handler(Looper.getMainLooper())
+    private val playlistAutoCloseRunnable = Runnable {
+        if (!playlistDrawerPinned && ::drawerLayout.isInitialized &&
+            drawerLayout.isDrawerOpen(GravityCompat.START)
+        ) {
+            drawerLayout.closeDrawer(GravityCompat.START)
+        }
+    }
+    private lateinit var playlistAdapter: PlaylistAdapter
+    /** Countdown tempo traccia corrente. */
+    private var timerWallStartMs: Long? = null
+    private var timerAllottedBaseline = 0
+    private val timerUiHandler = Handler(Looper.getMainLooper())
+    private val timerUiTickRunnable = object : Runnable {
+        override fun run() {
+            updatePresentationTimerBubbleUi()
+            if (timerWallStartMs != null) {
+                timerUiHandler.postDelayed(this, 1000L)
+            }
+        }
+    }
     
     // Remote control mappings
     private enum class RemoteAction {
@@ -119,33 +162,76 @@ class MainActivity : AppCompatActivity(), WebRemoteController {
     }
     
     private val filePickerLauncher = registerForActivityResult(
-        ActivityResultContracts.OpenDocument()
+        OpenDocumentPersistableContract()
     ) { uri ->
         uri?.let {
-            loadFileContent(it)
+            tryTakePersistableReadPermission(it)
+            loadExternalDocumentIntoPlaylist(it)
         }
     }
-    
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        
-        // Inizializza SharedPreferences PRIMA di setContentView
-        sharedPreferences = getDefaultSharedPreferences(this)
-        
-        // Carica solo isDarkMode PRIMA di setContentView per applicare il tema correttamente
-        isDarkMode = sharedPreferences.getBoolean("isDarkMode", false)
-        // Applica il tema salvato solo se necessario (evita ricreazioni inutili)
-        val currentNightMode = AppCompatDelegate.getDefaultNightMode()
-        val targetNightMode = if (isDarkMode) {
-            AppCompatDelegate.MODE_NIGHT_YES
-        } else {
-            AppCompatDelegate.MODE_NIGHT_NO
+
+    private val importPlaylistLauncher = registerForActivityResult(
+        OpenDocumentPersistableContract()
+    ) { uri ->
+        if (uri == null) return@registerForActivityResult
+        tryTakePersistableReadPermission(uri)
+        runCatching {
+            val text = contentResolver.openInputStream(uri)?.use {
+                it.readBytes().toString(Charsets.UTF_8)
+            } ?: ""
+            val loaded = Playlist.fromJson(JSONObject(text))
+            playlist.items.clear()
+            playlist.items.addAll(loaded.items)
+            playlist.currentIndex =
+                if (playlist.items.isEmpty()) 0
+                else loaded.currentIndex.coerceIn(0, playlist.items.lastIndex)
+            playlist.name = loaded.name.ifBlank { PlaylistStore.DEFAULT_NAME }
+            playlistStore.save(playlist)
+            refreshPlaylistDrawerUi()
+            invalidateOptionsMenu()
+            if (playlist.items.isEmpty()) {
+                emptyPlaybackUiAfterPlaylistRemoved()
+            } else {
+                loadPlaylistItemAt(playlist.currentIndex, showProgress = false, snapshotLeavingTimer = false)
+            }
+            Toast.makeText(this, getString(R.string.file_imported), Toast.LENGTH_SHORT).show()
+        }.onFailure {
+            Toast.makeText(this, getString(R.string.playlist_import_failed), Toast.LENGTH_LONG).show()
         }
-        // Applica il tema solo se è diverso da quello corrente
-        if (currentNightMode != targetNightMode) {
+    }
+
+    private val exportPlaylistLauncher = registerForActivityResult(
+        CreateJsonDocumentContract()
+    ) { uri ->
+        if (uri != null) runCatching {
+            contentResolver.openOutputStream(uri)?.use { os ->
+                os.write(playlist.toJson().toString().toByteArray(Charsets.UTF_8))
+            }
+            Toast.makeText(this, getString(R.string.save), Toast.LENGTH_SHORT).show()
+        }.onFailure {
+            Toast.makeText(this, getString(R.string.error_loading_file), Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        // Preferenze + tema giorno/notte PRIMA di super.onCreate(): evita il primo inflate
+        // con tema sbagliato (su alcuni dispositivi causa IllegalState/ricreazioni anomale).
+        val prefsBootstrap = getDefaultSharedPreferences(applicationContext)
+        val darkBootstrap = prefsBootstrap.getBoolean("isDarkMode", false)
+        val targetNightMode =
+            if (darkBootstrap) AppCompatDelegate.MODE_NIGHT_YES else AppCompatDelegate.MODE_NIGHT_NO
+        if (AppCompatDelegate.getDefaultNightMode() != targetNightMode) {
             AppCompatDelegate.setDefaultNightMode(targetNightMode)
         }
-        
+
+        super.onCreate(savedInstanceState)
+
+        sharedPreferences = getDefaultSharedPreferences(this)
+        isDarkMode = darkBootstrap
+        playlistStore = PlaylistStore(this)
+        playlist = playlistStore.load()
+        migrateLegacyImportedToPlaylist()
+
         setContentView(R.layout.activity_main)
         
         // Configura la toolbar standard con i pulsanti
@@ -277,26 +363,40 @@ class MainActivity : AppCompatActivity(), WebRemoteController {
     
     override fun onPrepareOptionsMenu(menu: android.view.Menu?): Boolean {
         super.onPrepareOptionsMenu(menu)
-        val item = menu?.findItem(R.id.menu_web_server_indicator) ?: return true
-        item.isVisible = webRemoteEnabled
-        if (webRemoteEnabled) {
-            if (webServerIndicatorState == WebServerIndicatorState.ACTIVE && getLocalIpAddress() == null) {
-                webServerIndicatorState = WebServerIndicatorState.NO_NETWORK
+        menu?.findItem(R.id.menu_timer_reset)?.isVisible =
+            timerAllottedBaseline > 0 || timerWallStartMs != null
+        val wsItem = menu?.findItem(R.id.menu_web_server_indicator)
+        if (wsItem != null) {
+            wsItem.isVisible = webRemoteEnabled
+            if (webRemoteEnabled) {
+                if (webServerIndicatorState == WebServerIndicatorState.ACTIVE && getLocalIpAddress() == null) {
+                    webServerIndicatorState = WebServerIndicatorState.NO_NETWORK
+                }
+                val iconRes = when (webServerIndicatorState) {
+                    WebServerIndicatorState.STARTING -> R.drawable.ic_web_server_orange
+                    WebServerIndicatorState.ACTIVE -> R.drawable.ic_web_server
+                    WebServerIndicatorState.NO_NETWORK -> R.drawable.ic_web_server_red
+                }
+                wsItem.setIcon(iconRes)
             }
-            val iconRes = when (webServerIndicatorState) {
-                WebServerIndicatorState.STARTING -> R.drawable.ic_web_server_orange
-                WebServerIndicatorState.ACTIVE -> R.drawable.ic_web_server
-                WebServerIndicatorState.NO_NETWORK -> R.drawable.ic_web_server_red
-            }
-            item.setIcon(iconRes)
         }
         return true
     }
     
     override fun onOptionsItemSelected(item: android.view.MenuItem): Boolean {
         return when (item.itemId) {
-            R.id.menu_file -> {
-                showFileMenu()
+            R.id.menu_playlist -> {
+                if (::drawerLayout.isInitialized) {
+                    if (drawerLayout.isDrawerOpen(GravityCompat.START)) {
+                        drawerLayout.closeDrawer(GravityCompat.START)
+                    } else {
+                        drawerLayout.openDrawer(GravityCompat.START)
+                    }
+                }
+                true
+            }
+            R.id.menu_timer_reset -> {
+                resetCurrentTrackTimerUi()
                 true
             }
             R.id.menu_toggle_controls -> {
@@ -340,6 +440,15 @@ class MainActivity : AppCompatActivity(), WebRemoteController {
         speedSlider = findViewById(R.id.speedSlider)
         textSizeSlider = findViewById(R.id.textSizeSlider)
         controlsLayout = findViewById(R.id.controlsLayout)
+        timerBubble = findViewById(R.id.timerBubble)
+        timerBubbleText = findViewById(R.id.timerBubbleText)
+        timerBubble.isClickable = true
+        timerBubble.isFocusable = true
+        timerBubble.setOnClickListener {
+            if (timerWallStartMs != null) {
+                commitAndStopPresentationTimerAndSave()
+            }
+        }
         wpmText = findViewById(R.id.wpmText)
         btnSetWpm = findViewById(R.id.btnSetWpm)
         
@@ -388,6 +497,8 @@ class MainActivity : AppCompatActivity(), WebRemoteController {
         
         // Aggiorna WPM dopo che il layout è pronto (altezze disponibili)
         scrollView.post { updateWpmDisplay() }
+
+        setupPlaylistDrawer()
     }
     
     private fun setupListeners() {
@@ -517,7 +628,6 @@ class MainActivity : AppCompatActivity(), WebRemoteController {
     }
     
     private fun loadFileContentInternal(uri: android.net.Uri) {
-        // Mostra dialog di caricamento
         val progressView = layoutInflater.inflate(R.layout.dialog_progress, null)
         progressDialog = MaterialAlertDialogBuilder(this)
             .setView(progressView)
@@ -525,7 +635,6 @@ class MainActivity : AppCompatActivity(), WebRemoteController {
             .create()
         progressDialog?.show()
         
-        // Esegui il caricamento in un thread separato
         Thread {
             try {
                 val extension = FileUtils.getFileExtension(this@MainActivity, uri)
@@ -538,26 +647,34 @@ class MainActivity : AppCompatActivity(), WebRemoteController {
                         text == null -> Toast.makeText(this@MainActivity, getString(R.string.error_loading_file), Toast.LENGTH_LONG).show()
                         text.isEmpty() -> Toast.makeText(this@MainActivity, getString(R.string.no_text_loaded), Toast.LENGTH_SHORT).show()
                         else -> {
+                            tryTakePersistableReadPermission(uri)
                             val displayName = getFileNameFromUri(uri)
-                            val id = saveImportedFile(text, displayName, extension)
-                            currentImportedFileId = id
-                            currentFileUri = null
-                            savedText = text
-                            savedTextExtension = extension
-                            sharedPreferences.edit()
-                                .putString("savedText", text)
-                                .putString("savedTextExtension", extension)
-                                .putString("currentImportedFileId", id)
-                                .remove("currentFileUri")
-                                .remove("currentFileExtension")
-                                .apply()
-                            if (extension.lowercase() == "md") {
-                                textView.text = MarkdownFormatter.formatMarkdownSimple(text)
+                            val uriString = uri.toString()
+                            val existing = playlist.items.indexOfFirst { it.uriStr == uriString }
+                            val prevIdx = playlist.currentIndex
+                            if (existing >= 0) {
+                                val targetIdx = existing
+                                if (prevIdx in playlist.items.indices && prevIdx != targetIdx) {
+                                    finalizeTimerMeasurementForPlaylistItem(playlist.items[prevIdx])
+                                    playlistStore.save(playlist)
+                                }
+                                playlist.currentIndex = targetIdx
                             } else {
-                                textView.text = text
+                                if (prevIdx in playlist.items.indices) {
+                                    finalizeTimerMeasurementForPlaylistItem(playlist.items[prevIdx])
+                                    playlistStore.save(playlist)
+                                }
+                                val entry = PlaylistItem(uriStr = uriString, displayName = displayName)
+                                applyMarkdownMetaToItem(entry, text, extension)
+                                playlist.items.add(entry)
+                                playlist.currentIndex = playlist.items.lastIndex
                             }
-                            scrollView.scrollTo(0, 0)
-                            scrollView.post { updateWpmDisplay() }
+                            val itemNow = playlist.items[playlist.currentIndex]
+                            applyMarkdownMetaToItem(itemNow, text, extension)
+                            persistDocumentAfterLoad(text, extension, playlist.currentIndex)
+                            showLoadedText(text, extension)
+                            playlistStore.save(playlist)
+                            refreshPlaylistDrawerUi()
                             Toast.makeText(this@MainActivity, getString(R.string.file_imported), Toast.LENGTH_SHORT).show()
                         }
                     }
@@ -571,7 +688,11 @@ class MainActivity : AppCompatActivity(), WebRemoteController {
             }
         }.start()
     }
-    
+
+    private fun loadExternalDocumentIntoPlaylist(uri: android.net.Uri) {
+        loadFileContentInternal(uri)
+    }
+
     private fun togglePlayPause() {
         if (isPlaying) {
             stopAutoScroll()
@@ -595,15 +716,16 @@ class MainActivity : AppCompatActivity(), WebRemoteController {
         }
         hideToolbar()
         
-        val scrollSpeed = getScrollSpeedFromWpm()
+        maybeStartPresentationTimerWallClock()
         scrollRunnable = object : Runnable {
             override fun run() {
                 if (isPlaying) {
-                    val scrollAmount = (scrollSpeed * 2).toInt()
+                    val scrollAmount = (getScrollSpeedFromWpm() * 2).toInt().coerceAtLeast(1)
                     scrollView.smoothScrollBy(0, scrollAmount)
                     
                     // Controlla se abbiamo raggiunto la fine
-                    val maxScroll = scrollView.getChildAt(0).height - scrollView.height
+                    val viewportChild = scrollView.getChildAt(0) ?: return
+                    val maxScroll = viewportChild.height - scrollView.height
                     if (scrollView.scrollY >= maxScroll) {
                         stopAutoScroll()
                     } else {
@@ -973,24 +1095,6 @@ class MainActivity : AppCompatActivity(), WebRemoteController {
             .show()
     }
     
-    private fun showFileMenu() {
-        val options = arrayOf(
-            getString(R.string.new_document),
-            getString(R.string.import_file),
-            getString(R.string.imported_files)
-        )
-        MaterialAlertDialogBuilder(this)
-            .setTitle(getString(R.string.file_menu))
-            .setItems(options) { _, which ->
-                when (which) {
-                    0 -> showNewDocument()
-                    1 -> checkPermissionAndOpenFilePicker()
-                    2 -> showImportedFilesDialog()
-                }
-            }
-            .show()
-    }
-    
     private fun showNewDocument() {
         val dialogView = layoutInflater.inflate(R.layout.dialog_new_document, null)
         val editName = dialogView.findViewById<TextInputEditText>(R.id.newDocName)
@@ -1011,93 +1115,25 @@ class MainActivity : AppCompatActivity(), WebRemoteController {
                 }
                 if (!name.lowercase().endsWith(".md")) name += ".md"
                 val id = saveImportedFile(content, name, "md")
-                currentImportedFileId = id
-                savedText = content
-                savedTextExtension = "md"
-                sharedPreferences.edit()
-                    .putString("savedText", content)
-                    .putString("savedTextExtension", "md")
-                    .putString("currentImportedFileId", id)
-                    .remove("currentFileUri")
-                    .remove("currentFileExtension")
-                    .apply()
-                textView.text = MarkdownFormatter.formatMarkdownSimple(content)
-                scrollView.scrollTo(0, 0)
-                scrollView.post { updateWpmDisplay() }
+                val internalUri = PlaylistStore.INTERNAL_URI_PREFIX + id
+                val prevIdx = playlist.currentIndex
+                if (prevIdx in playlist.items.indices) {
+                    finalizeTimerMeasurementForPlaylistItem(playlist.items[prevIdx])
+                    playlistStore.save(playlist)
+                }
+                val plItem = PlaylistItem(uriStr = internalUri, displayName = name)
+                playlist.items.add(plItem)
+                playlist.currentIndex = playlist.items.lastIndex
+                playlistStore.save(playlist)
+                persistDocumentAfterLoad(content, "md", playlist.currentIndex)
+                showLoadedText(content, "md")
+                refreshPlaylistDrawerUi()
+
                 Toast.makeText(this, getString(R.string.document_created), Toast.LENGTH_SHORT).show()
                 newDocDialog.dismiss()
             }
         }
         newDocDialog.show()
-    }
-    
-    private fun showImportedFilesDialog() {
-        val list = getImportedFileList().toMutableList()
-        if (list.isEmpty()) {
-            MaterialAlertDialogBuilder(this)
-                .setTitle(getString(R.string.imported_files))
-                .setMessage(getString(R.string.no_imported_files))
-                .setPositiveButton(getString(R.string.ok), null)
-                .show()
-            return
-        }
-        val listView = android.widget.ListView(this)
-        val dialog = MaterialAlertDialogBuilder(this)
-            .setTitle(getString(R.string.imported_files))
-            .setView(listView)
-            .setNegativeButton(getString(R.string.cancel), null)
-            .create()
-        val adapter = object : android.widget.BaseAdapter() {
-            override fun getCount() = list.size
-            override fun getItem(position: Int) = list[position]
-            override fun getItemId(position: Int) = position.toLong()
-            override fun getView(position: Int, convertView: android.view.View?, parent: android.view.ViewGroup): android.view.View {
-                val view = convertView ?: layoutInflater.inflate(R.layout.item_imported_file, parent, false)
-                val item = list[position]
-                view.findViewById<android.widget.TextView>(R.id.itemFileName).text = item.second
-                view.findViewById<MaterialButton>(R.id.itemDeleteBtn).setOnClickListener {
-                    MaterialAlertDialogBuilder(this@MainActivity)
-                        .setMessage(getString(R.string.delete_file_confirm, item.second))
-                        .setPositiveButton(getString(R.string.ok)) { _, _ ->
-                            removeImportedFile(item.first)
-                            list.removeAll { it.first == item.first }
-                            notifyDataSetChanged()
-                            if (list.isEmpty()) dialog.dismiss()
-                        }
-                        .setNegativeButton(getString(R.string.cancel), null)
-                        .show()
-                }
-                view.setOnClickListener { openImportedFile(item.first, item.third); dialog.dismiss() }
-                return view
-            }
-        }
-        listView.adapter = adapter
-        dialog.show()
-    }
-    
-    private fun openImportedFile(id: String, extension: String) {
-        val content = loadImportedFileContent(id) ?: run {
-            Toast.makeText(this, getString(R.string.error_loading_file), Toast.LENGTH_SHORT).show()
-            return
-        }
-        currentImportedFileId = id
-        currentFileUri = null
-        savedText = content
-        savedTextExtension = extension
-        sharedPreferences.edit()
-            .putString("savedText", content)
-            .putString("savedTextExtension", extension)
-            .putString("currentImportedFileId", id)
-            .remove("currentFileUri")
-            .remove("currentFileExtension")
-            .apply()
-        if (extension.lowercase() == "md") {
-            textView.text = MarkdownFormatter.formatMarkdownSimple(content)
-        } else {
-            textView.text = content
-        }
-        scrollView.scrollTo(0, 0)
-        scrollView.post { updateWpmDisplay() }
     }
     
     private fun getFileNameFromUri(uri: Uri): String {
@@ -1480,26 +1516,63 @@ class MainActivity : AppCompatActivity(), WebRemoteController {
         scrollMode = mode.coerceIn(0, 2)
         updateScrollModeButton()
     }
-    override fun getState(): WebRemoteState = WebRemoteState(
-        playing = isPlaying,
-        wpm = targetWpm,
-        textSize = currentTextSize,
-        hasText = countWords() > 0,
-        scrollMode = scrollMode
-    )
-    
-    override fun getRecentFiles(): List<Pair<Int, String>> {
-        val list = getImportedFileList()
-        if (list.isEmpty()) return emptyList()
-        return list.mapIndexed { index, triple -> Pair(index, triple.second) }
+    override fun getState(): WebRemoteState {
+        val rem = computeRemainingPresentationSeconds()
+        val title = playlist.items.getOrNull(playlist.currentIndex)?.displayName.orEmpty()
+        val plDisplayName = playlist.name.ifBlank { PlaylistStore.DEFAULT_NAME }
+        return WebRemoteState(
+            playing = isPlaying,
+            wpm = targetWpm,
+            textSize = currentTextSize,
+            hasText = countWords() > 0,
+            scrollMode = scrollMode,
+            playlistCurrentIndex = if (playlist.items.isEmpty()) -1 else playlist.currentIndex,
+            playlistSize = playlist.items.size,
+            playlistTotalSeconds = playlist.items.sumOf { it.effectiveSecondsForTotal() },
+            playlistCurrentTitle = title,
+            timerRemainingSeconds = rem,
+            timerAllottedSeconds = timerAllottedBaseline,
+            timerSessionStarted = timerWallStartMs != null,
+            timerBannerText = buildPresentationTimerClockBanner(),
+            playlistName = plDisplayName,
+            playlistDrawerPinned = playlistDrawerPinned,
+        )
     }
-    
+
+    override fun getRecentFiles(): List<Pair<Int, String>> =
+        playlist.items.mapIndexed { index, it -> Pair(index, it.displayName) }
+
     override fun loadRecentFile(index: Int) = runOnUiThread {
-        val list = getImportedFileList()
-        if (index in list.indices) {
-            val (id, _, ext) = list[index]
-            openImportedFile(id, ext)
+        if (playlist.items.isEmpty()) return@runOnUiThread
+        loadPlaylistItemAt(index.coerceIn(0, playlist.items.lastIndex), showProgress = false)
+    }
+
+    override fun onPlaylistNext() = runOnUiThread {
+        if (playlist.items.isEmpty()) return@runOnUiThread
+        val next = playlist.currentIndex + 1
+        if (next <= playlist.items.lastIndex) {
+            loadPlaylistItemAt(next, showProgress = false)
         }
+    }
+
+    override fun onPlaylistPrev() = runOnUiThread {
+        if (playlist.items.isEmpty()) return@runOnUiThread
+        val prevIdx = playlist.currentIndex - 1
+        if (prevIdx >= 0) {
+            loadPlaylistItemAt(prevIdx, showProgress = false)
+        }
+    }
+
+    override fun onTimerResetRemote() = runOnUiThread {
+        resetCurrentTrackTimerUi()
+    }
+
+    override fun stopPresentationTimerCommitRemote() = runOnUiThread {
+        commitAndStopPresentationTimerAndSave()
+    }
+
+    override fun togglePlaylistDrawerPinRemote() = runOnUiThread {
+        persistPlaylistDrawerPinEffects(!playlistDrawerPinned)
     }
     
     private fun showCustomizeRemoteDialog() {
@@ -2216,10 +2289,22 @@ class MainActivity : AppCompatActivity(), WebRemoteController {
             } else {
                 textView.text = savedTextValue
             }
+            syncPresentationTimerBaseline()
             return
         }
-        
-        // Se non c'è testo salvato, prova a caricare il file
+
+        // Playlist persistente sul dispositivo
+        if (playlist.items.isNotEmpty()) {
+            playlist.currentIndex = playlist.currentIndex.coerceIn(0, playlist.items.lastIndex)
+            loadPlaylistItemAt(
+                playlist.currentIndex,
+                showProgress = false,
+                snapshotLeavingTimer = false,
+            )
+            return
+        }
+
+        // Legacy: ripristino da URI salvato
         val savedUri = sharedPreferences.getString("currentFileUri", null)
         val savedExtension = sharedPreferences.getString("currentFileExtension", null)
         
@@ -2234,7 +2319,499 @@ class MainActivity : AppCompatActivity(), WebRemoteController {
             }
         }
     }
-    
+
+    /* ---------- Playlist, timer lettura, drawer ---------- */
+
+    private fun migrateLegacyImportedToPlaylist() {
+        if (playlist.items.isNotEmpty()) return
+        val legacy = getImportedFileList()
+        if (legacy.isEmpty()) return
+        playlist.items.clear()
+        for ((id, name, _) in legacy) {
+            playlist.items.add(
+                PlaylistItem(uriStr = PlaylistStore.INTERNAL_URI_PREFIX + id, displayName = name)
+            )
+        }
+        playlist.currentIndex = 0.coerceAtMost((playlist.items.size - 1).coerceAtLeast(0))
+        playlistStore.save(playlist)
+    }
+
+    private fun tryTakePersistableReadPermission(uri: Uri) {
+        try {
+            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        } catch (_: SecurityException) { }
+    }
+
+    private fun applyMarkdownMetaToItem(item: PlaylistItem, text: String, ext: String) {
+        if (ext.lowercase() == "md") {
+            GobboDurationParser.parseSeconds(text)?.let { item.lastParsedTagSeconds = it }
+        }
+    }
+
+    private fun persistDocumentAfterLoad(text: String, extension: String, currentIndex: Int) {
+        stopTimerTicker()
+        savedText = text
+        savedTextExtension = extension
+        currentImportedFileId = null
+        currentFileUri = null
+        playlist.currentIndex = currentIndex.coerceIn(0, (playlist.items.size - 1).coerceAtLeast(0))
+        sharedPreferences.edit()
+            .putString("savedText", text)
+            .putString("savedTextExtension", extension)
+            .remove("currentImportedFileId")
+            .remove("currentFileUri")
+            .remove("currentFileExtension")
+            .apply()
+        syncPresentationTimerBaseline()
+    }
+
+    private fun showLoadedText(text: String, extension: String) {
+        textView.text = if (extension.lowercase() == "md") MarkdownFormatter.formatMarkdownSimple(text)
+        else text
+        scrollView.scrollTo(0, 0)
+        scrollView.post { updateWpmDisplay() }
+    }
+
+    /** Baseline countdown in secondi per la voce playlist corrente. */
+    private fun syncPresentationTimerBaseline() {
+        val raw = savedText
+        val ext = savedTextExtension ?: "txt"
+        val item = playlist.currentItem()
+        if (item == null || raw.isNullOrEmpty()) {
+            timerAllottedBaseline = 0
+            timerWallStartMs = null
+            stopTimerTicker()
+            updatePresentationTimerBubbleUi()
+            invalidateOptionsMenu()
+            return
+        }
+        if (ext.lowercase() == "md") {
+            GobboDurationParser.parseSeconds(raw)?.let { item.lastParsedTagSeconds = it }
+        }
+        val explicit = item.durationSeconds
+        val tag = item.lastParsedTagSeconds
+        timerAllottedBaseline = explicit ?: (tag ?: 0)
+        timerWallStartMs = null
+        stopTimerTicker()
+        updatePresentationTimerBubbleUi()
+        playlistStore.save(playlist)
+        invalidateOptionsMenu()
+    }
+
+    private fun finalizeTimerMeasurementForPlaylistItem(item: PlaylistItem?) {
+        if (item == null) return
+        val start = timerWallStartMs ?: return
+        val secs = ((System.currentTimeMillis() - start) / 1000L).toInt().coerceAtLeast(0)
+        timerWallStartMs = null
+        item.savedTimerElapsedMs = null
+        if (secs > 0) item.recordedElapsedSeconds = secs
+    }
+
+    private fun commitAndStopPresentationTimerAndSave() {
+        finalizeTimerMeasurementForPlaylistItem(playlist.currentItem())
+        stopTimerTicker()
+        playlistStore.save(playlist)
+        if (::recyclerPlaylistItems.isInitialized) refreshPlaylistDrawerUi()
+        updatePresentationTimerBubbleUi()
+        invalidateOptionsMenu()
+    }
+
+    private fun persistPlaylistDrawerPinEffects(pinnedTo: Boolean) {
+        playlistDrawerPinned = pinnedTo
+        sharedPreferences.edit().putBoolean("playlistDrawerPinned", pinnedTo).apply()
+        refreshPlaylistDrawerBarPinAppearance()
+        if (pinnedTo) playlistAutoCloseHandler.removeCallbacks(playlistAutoCloseRunnable)
+        else if (::drawerLayout.isInitialized && drawerLayout.isDrawerOpen(GravityCompat.START)) {
+            schedulePlaylistDrawerAutoClose()
+        }
+    }
+
+    private fun computeRemainingPresentationSeconds(): Int? {
+        val allotted = timerAllottedBaseline
+        val startMs = timerWallStartMs
+        if (startMs == null) {
+            if (allotted <= 0) return null
+            return allotted
+        }
+        val elapsedSec = ((System.currentTimeMillis() - startMs) / 1000L).toInt().coerceAtLeast(0)
+        return if (allotted <= 0) -elapsedSec else allotted - elapsedSec
+    }
+
+    private fun maybeStartPresentationTimerWallClock() {
+        if (timerWallStartMs == null) {
+            timerWallStartMs = System.currentTimeMillis()
+        }
+        startTimerTicker()
+    }
+
+    private fun resetCurrentTrackTimerUi() {
+        playlist.currentItem()?.savedTimerElapsedMs = null
+        timerWallStartMs = System.currentTimeMillis()
+        startTimerTicker()
+        updatePresentationTimerBubbleUi()
+        Toast.makeText(this, getString(R.string.timer_reset), Toast.LENGTH_SHORT).show()
+        playlistStore.save(playlist)
+        invalidateOptionsMenu()
+    }
+
+    private fun stopTimerTicker() {
+        timerUiHandler.removeCallbacks(timerUiTickRunnable)
+    }
+
+    private fun startTimerTicker() {
+        stopTimerTicker()
+        timerUiHandler.post(timerUiTickRunnable)
+    }
+
+    private fun buildPresentationTimerClockDigits(): String {
+        val secs = computeRemainingPresentationSeconds()
+        if (secs != null) return PlaylistAdapter.formatDuration(this, secs)
+        if (timerAllottedBaseline <= 0) return ""
+        return PlaylistAdapter.formatDuration(this, timerAllottedBaseline)
+    }
+
+    private fun buildPresentationTimerClockBanner(): String {
+        val d = buildPresentationTimerClockDigits()
+        return if (d.isEmpty()) "" else "⏱ $d"
+    }
+
+    private fun timerAccentForDisplayedSeconds(displayedSecs: Int, allotted: Int): Int {
+        if (allotted <= 0) {
+            return when {
+                timerWallStartMs == null -> MaterialColors.getColor(this, com.google.android.material.R.attr.colorOutline, Color.GRAY)
+                displayedSecs >= 0 -> Color.parseColor("#00897B")
+                displayedSecs >= -60 -> Color.parseColor("#FB8C00")
+                else -> Color.parseColor("#D32F2F")
+            }
+        }
+        if (displayedSecs < 0) return Color.parseColor("#D32F2F")
+        if (timerWallStartMs == null) return Color.parseColor("#1B5E20")
+        val t = (displayedSecs.toFloat() / allotted.toFloat()).coerceIn(0f, 1f)
+        val green = Color.parseColor("#2E7D32")
+        val red = Color.parseColor("#C62828")
+        return androidx.core.graphics.ColorUtils.blendARGB(red, green, t)
+    }
+
+    private fun updatePresentationTimerBubbleUi() {
+        supportActionBar?.let { ab ->
+            ab.title = getString(R.string.app_name)
+            ab.subtitle = null
+        }
+        if (!::timerBubble.isInitialized) return
+
+        val digits = buildPresentationTimerClockDigits()
+        if (digits.isEmpty()) {
+            timerBubble.visibility = View.GONE
+            return
+        }
+
+        val allotted = timerAllottedBaseline
+        val displayedSecs =
+            computeRemainingPresentationSeconds()
+                ?: if (timerAllottedBaseline > 0) timerAllottedBaseline else 0
+        val banner = buildPresentationTimerClockBanner()
+        val accent = timerAccentForDisplayedSeconds(displayedSecs, allotted)
+
+        val titleSpan = SpannableString(banner)
+        titleSpan.setSpan(RelativeSizeSpan(1f), 0, banner.length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+        titleSpan.setSpan(StyleSpan(Typeface.BOLD), 0, banner.length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+        titleSpan.setSpan(
+            ForegroundColorSpan(accent),
+            0,
+            banner.length,
+            Spannable.SPAN_EXCLUSIVE_EXCLUSIVE,
+        )
+
+        timerBubbleText.text = titleSpan
+
+        timerBubble.visibility = View.VISIBLE
+        timerBubble.invalidate()
+        val strokePx = TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_DIP,
+            2f,
+            resources.displayMetrics,
+        ).toInt()
+        timerBubble.strokeWidth = strokePx
+        timerBubble.strokeColor = accent
+    }
+
+    private fun readTextPlaylistItem(item: PlaylistItem): String? {
+        val internalId = PlaylistStore.internalIdFromUri(item.uriStr)
+        val extGuess = item.displayName.substringAfterLast('.', "txt").lowercase()
+        return if (internalId != null) {
+            val file = File(getImportedFilesDir(), internalId)
+            if (!file.exists()) null else FileInputStream(file).use {
+                FileUtils.readTextUsingStream(it, extGuess)
+            }
+        } else {
+            val parsed = Uri.parse(item.uriStr)
+            val ext = FileUtils.getFileExtension(this, parsed)
+            FileUtils.readTextFile(this, parsed, ext)
+        }
+    }
+
+    private fun loadPlaylistItemAt(
+        position: Int,
+        showProgress: Boolean = true,
+        snapshotLeavingTimer: Boolean = true,
+    ) {
+        if (playlist.items.isEmpty()) return
+        val idx = position.coerceIn(0, playlist.items.lastIndex)
+        if (snapshotLeavingTimer && playlist.currentIndex in playlist.items.indices) {
+            finalizeTimerMeasurementForPlaylistItem(playlist.items[playlist.currentIndex])
+            playlistStore.save(playlist)
+        }
+        val item = playlist.items[idx]
+        if (showProgress) {
+            val progressView = layoutInflater.inflate(R.layout.dialog_progress, null)
+            progressDialog = MaterialAlertDialogBuilder(this)
+                .setView(progressView)
+                .setCancelable(false)
+                .create()
+            progressDialog?.show()
+        }
+        Thread {
+            val text = readTextPlaylistItem(item)
+            runOnUiThread {
+                if (showProgress) progressDialog?.dismiss()
+                when {
+                    text == null -> Toast.makeText(this, getString(R.string.error_loading_file), Toast.LENGTH_LONG).show()
+                    text.isEmpty() -> Toast.makeText(this, getString(R.string.no_text_loaded), Toast.LENGTH_SHORT).show()
+                    else -> {
+                        val ext = item.displayName.substringAfterLast('.', "txt").lowercase()
+                        applyMarkdownMetaToItem(item, text, ext)
+                        persistDocumentAfterLoad(text, ext, idx)
+                        showLoadedText(text, ext)
+                        playlistStore.save(playlist)
+                        refreshPlaylistDrawerUi()
+                        if (::drawerLayout.isInitialized) drawerLayout.closeDrawer(GravityCompat.START)
+                    }
+                }
+            }
+        }.start()
+    }
+
+    private fun setupPlaylistDrawer() {
+        drawerLayout = findViewById(R.id.drawerLayout)
+        recyclerPlaylistItems = findViewById(R.id.recyclerPlaylistItems)
+        playlistDrawerPinned = sharedPreferences.getBoolean("playlistDrawerPinned", false)
+
+        findViewById<MaterialButton>(R.id.btnPlaylistBarPinDrawer).setOnClickListener {
+            persistPlaylistDrawerPinEffects(!playlistDrawerPinned)
+        }
+
+        playlistAdapter = PlaylistAdapter(
+            onOpen = { pos -> loadPlaylistItemAt(pos) },
+            onEdit = { pos -> showEditPlaylistItemDialog(pos) },
+            onRemove = { pos -> removePlaylistItemAt(pos) }
+        )
+        recyclerPlaylistItems.layoutManager = LinearLayoutManager(this)
+        recyclerPlaylistItems.adapter = playlistAdapter
+
+        findViewById<android.widget.TextView>(R.id.drawerPlaylistName).setOnClickListener {
+            showRenamePlaylistDialog()
+        }
+
+        findViewById<MaterialButton>(R.id.btnPlaylistAddFile).setOnClickListener {
+            checkPermissionAndOpenFilePicker()
+        }
+        findViewById<MaterialButton>(R.id.btnPlaylistNewDoc).setOnClickListener {
+            showNewDocument()
+        }
+        findViewById<MaterialButton>(R.id.btnPlaylistBarNew).setOnClickListener {
+            showNewPlaylistConfirmDialog()
+        }
+        findViewById<MaterialButton>(R.id.btnPlaylistBarOpen).setOnClickListener {
+            importPlaylistLauncher.launch(arrayOf("application/json", "application/octet-stream", "*/*"))
+        }
+        findViewById<MaterialButton>(R.id.btnPlaylistBarSave).setOnClickListener {
+            exportPlaylistLauncher.launch("gobbo-playlist.json")
+        }
+
+        drawerLayout.addDrawerListener(object : DrawerLayout.SimpleDrawerListener() {
+            override fun onDrawerOpened(drawerView: android.view.View) {
+                if (drawerView.id == R.id.drawerPlaylistRoot) {
+                    refreshPlaylistDrawerUi()
+                    schedulePlaylistDrawerAutoClose()
+                }
+            }
+
+            override fun onDrawerClosed(drawerView: android.view.View) {
+                playlistAutoCloseHandler.removeCallbacks(playlistAutoCloseRunnable)
+            }
+        })
+
+        refreshPlaylistDrawerUi()
+    }
+
+    private fun schedulePlaylistDrawerAutoClose() {
+        playlistAutoCloseHandler.removeCallbacks(playlistAutoCloseRunnable)
+        if (playlistDrawerPinned) return
+        playlistAutoCloseHandler.postDelayed(playlistAutoCloseRunnable, 5000L)
+    }
+
+    private fun refreshPlaylistDrawerUi() {
+        if (!::recyclerPlaylistItems.isInitialized) return
+        playlistAdapter.submit(playlist.items, playlist.currentIndex)
+        findViewById<android.widget.TextView>(R.id.drawerPlaylistName).text =
+            playlist.name.ifBlank { PlaylistStore.DEFAULT_NAME }
+        val totalSec = playlist.items.sumOf { it.effectiveSecondsForTotal() }
+        findViewById<android.widget.TextView>(R.id.drawerPlaylistTotalLabel).text =
+            getString(R.string.playlist_total_seconds, PlaylistAdapter.formatDuration(this, totalSec))
+        refreshPlaylistDrawerBarPinAppearance()
+    }
+
+    private fun refreshPlaylistDrawerBarPinAppearance() {
+        val btn = findViewById<MaterialButton?>(R.id.btnPlaylistBarPinDrawer) ?: return
+        val pinned = playlistDrawerPinned
+        val primary = MaterialColors.getColor(this, com.google.android.material.R.attr.colorPrimary, Color.GRAY)
+        val onVariant = MaterialColors.getColor(
+            this,
+            com.google.android.material.R.attr.colorOnSurfaceVariant,
+            Color.GRAY,
+        )
+        val outlineVariant = MaterialColors.getColor(
+            this,
+            com.google.android.material.R.attr.colorOutlineVariant,
+            Color.GRAY,
+        )
+        val fillPinned = MaterialColors.getColor(
+            this,
+            com.google.android.material.R.attr.colorPrimaryContainer,
+            Color.LTGRAY,
+        )
+        val fillDefault = MaterialColors.getColor(
+            this,
+            com.google.android.material.R.attr.colorSurfaceContainerHigh,
+            Color.LTGRAY,
+        )
+        btn.iconTint = ColorStateList.valueOf(if (pinned) primary else onVariant)
+        btn.strokeColor = ColorStateList.valueOf(if (pinned) primary else outlineVariant)
+        btn.backgroundTintList = ColorStateList.valueOf(if (pinned) fillPinned else fillDefault)
+    }
+
+    private fun emptyPlaybackUiAfterPlaylistRemoved() {
+        playlist.currentIndex = 0
+        savedText = ""
+        savedTextExtension = ""
+        textView.text = getString(R.string.empty_state_hint)
+        clearCurrentFile()
+        sharedPreferences.edit()
+            .putString("savedText", "")
+            .putString("savedTextExtension", "")
+            .apply()
+        timerWallStartMs = null
+        syncPresentationTimerBaseline()
+        scrollView.post { updateWpmDisplay() }
+        invalidateOptionsMenu()
+    }
+
+    private fun showRenamePlaylistDialog() {
+        val dialogView = layoutInflater.inflate(R.layout.dialog_text_input, null)
+        val textInputLayout = dialogView.findViewById<TextInputLayout>(R.id.textInputLayout)
+        val textInputEditText = dialogView.findViewById<TextInputEditText>(R.id.textInputEditText)
+        textInputLayout.hint = getString(R.string.playlist_rename_title)
+        textInputLayout.isCounterEnabled = false
+        textInputEditText.apply {
+            inputType =
+                android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            maxLines = 1
+            setSingleLine(true)
+            setText(playlist.name.ifBlank { PlaylistStore.DEFAULT_NAME })
+            setSelection(text?.length ?: 0)
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle(getString(R.string.playlist_rename_title))
+            .setView(dialogView)
+            .setPositiveButton(getString(R.string.ok)) { _, _ ->
+                val name = textInputEditText.text?.toString()?.trim().orEmpty()
+                if (name.isNotEmpty()) {
+                    playlist.name = name
+                    playlistStore.save(playlist)
+                    refreshPlaylistDrawerUi()
+                }
+            }
+            .setNegativeButton(getString(R.string.cancel), null)
+            .show()
+    }
+
+    private fun showNewPlaylistConfirmDialog() {
+        MaterialAlertDialogBuilder(this)
+            .setMessage(getString(R.string.playlist_new_confirm))
+            .setPositiveButton(getString(R.string.ok)) { _, _ ->
+                playlist.items.clear()
+                playlist.currentIndex = 0
+                playlist.name = PlaylistStore.DEFAULT_NAME
+                playlistStore.save(playlist)
+                emptyPlaybackUiAfterPlaylistRemoved()
+                refreshPlaylistDrawerUi()
+            }
+            .setNegativeButton(getString(R.string.cancel), null)
+            .show()
+    }
+
+    private fun showEditPlaylistItemDialog(position: Int) {
+        val item = playlist.items.getOrNull(position) ?: return
+        val nameInput = TextInputEditText(this).apply { setText(item.displayName) }
+        val durInput = TextInputEditText(this).apply {
+            hint = getString(R.string.playlist_duration_auto)
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER
+            item.durationSeconds?.let { setText(it.toString()) }
+        }
+        val container = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.VERTICAL
+            setPadding(48, 24, 48, 0)
+            addView(nameInput, android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
+            addView(durInput, android.widget.LinearLayout.LayoutParams(
+                android.widget.LinearLayout.LayoutParams.MATCH_PARENT,
+                android.widget.LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = 16 })
+        }
+        MaterialAlertDialogBuilder(this)
+            .setTitle(getString(R.string.playlist_edit_item))
+            .setView(container)
+            .setPositiveButton(getString(R.string.save)) { _, _ ->
+                val newName = nameInput.text?.toString()?.trim().orEmpty()
+                if (newName.isNotEmpty()) item.displayName = newName
+                val rawDur = durInput.text?.toString()?.trim().orEmpty()
+                item.durationSeconds = if (rawDur.isBlank()) null else rawDur.toIntOrNull()?.takeIf { it >= 0 }
+                playlistStore.save(playlist)
+                if (position == playlist.currentIndex) syncPresentationTimerBaseline()
+                refreshPlaylistDrawerUi()
+            }
+            .setNegativeButton(getString(R.string.cancel), null)
+            .show()
+    }
+
+    private fun removePlaylistItemAt(position: Int) {
+        val item = playlist.items.getOrNull(position) ?: return
+        MaterialAlertDialogBuilder(this)
+            .setMessage(getString(R.string.delete_file_confirm, item.displayName))
+            .setPositiveButton(getString(R.string.ok)) { _, _ ->
+                PlaylistStore.internalIdFromUri(item.uriStr)?.let { removeImportedFile(it) }
+                playlist.items.removeAt(position)
+                if (position < playlist.currentIndex) {
+                    playlist.currentIndex--
+                }
+                playlist.currentIndex = playlist.currentIndex.coerceIn(
+                    0,
+                    (playlist.items.size - 1).takeIf { it >= 0 } ?: 0
+                )
+                if (playlist.items.isEmpty()) {
+                    emptyPlaybackUiAfterPlaylistRemoved()
+                } else {
+                    loadPlaylistItemAt(playlist.currentIndex, showProgress = false)
+                }
+                playlistStore.save(playlist)
+                refreshPlaylistDrawerUi()
+            }
+            .setNegativeButton(getString(R.string.cancel), null)
+            .show()
+    }
+
     private fun getImportedFilesDir(): File {
         val dir = File(filesDir, "imported")
         if (!dir.exists()) dir.mkdirs()
@@ -2298,9 +2875,8 @@ class MainActivity : AppCompatActivity(), WebRemoteController {
     override fun onDestroy() {
         super.onDestroy()
         stopAutoScroll()
-        scrollHandler?.removeCallbacksAndMessages(null)
-        volumeKeyHandler?.removeCallbacksAndMessages(null)
-        toolbarHideHandler?.removeCallbacksAndMessages(null)
+        playlistAutoCloseHandler.removeCallbacksAndMessages(null)
+        timerUiHandler.removeCallbacksAndMessages(null)
         progressDialog?.dismiss()
     }
     
